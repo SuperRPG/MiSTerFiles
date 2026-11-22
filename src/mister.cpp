@@ -1,5 +1,5 @@
-// MiSTerFiles: MiSTer FPGA platform layer (see mister.h)
-#ifdef DEVICE_MISTER
+// MiSTerFiles: MiSTer FPGA platform layer, also used by the GroovyArcade target (see mister.h)
+#if defined(DEVICE_MISTER) || defined(DEVICE_GROOVY)
 
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +33,7 @@ bool lowRes = false;
 int overscan = 0;
 int marginX = 0;
 int marginY = 0;
+double displayAspect = 4.0 / 3.0;
 }
 
 namespace
@@ -65,8 +66,10 @@ std::vector<EvDev> evdevs;
 Uint32 lastScan = 0;
 
 bool useJoystick = false;
-struct Pad { SDL_Joystick *joy; SDL_GameController *gc; SDL_JoystickID id; };
+struct Pad { SDL_Joystick *joy; SDL_GameController *gc; SDL_JoystickID id; bool quitHeld; };
 std::vector<Pad> pads;
+
+const Uint32 SYNTH_WINDOW_ID = 0x4D460000;   // "MF"
 
 void pushKey(SDL_Scancode sc, bool down)
 {
@@ -78,6 +81,7 @@ void pushKey(SDL_Scancode sc, bool down)
    e.key.repeat = 0;
    e.key.keysym.scancode = sc;
    e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+   e.key.windowID = SYNTH_WINDOW_ID;   // ours: let it through the GroovyArcade event filter
    SDL_PushEvent(&e);
 }
 
@@ -99,6 +103,160 @@ void releaseSource(long src)
       if (it->second.down[sc]) setKey(src, (SDL_Scancode)sc, false);
    sources.erase(src);
 }
+
+#if defined(DEVICE_GROOVY)
+// ------------------------------------------------------ GroovyArcade ----
+SDL_Window    *window = NULL;
+int            winW = 0, winH = 0;
+
+// Settings from MiSTerFiles.ini (MF_INI); environment variables MF_<KEY> override them
+std::map<std::string, std::string> ini;
+
+std::string trim(const std::string &s)
+{
+   size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
+   return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+}
+
+void loadIni(void)
+{
+   const char *path = getenv("MF_INI") ? getenv("MF_INI") : "./MiSTerFiles.ini";
+   std::ifstream in(path, std::ios::binary);
+   if (!in.good()) in.open(getenv("MF_INI_EXAMPLE") ? getenv("MF_INI_EXAMPLE") : "./MiSTerFiles.ini.example", std::ios::binary);
+   std::string line;
+   while (in.good() && std::getline(in, line))
+   {
+      line = trim(line);
+      if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+      size_t eq = line.find('=');
+      if (eq == std::string::npos) continue;
+      std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
+      // bash-style quoting ("..." or '...'), drop a trailing # comment outside quotes
+      if (!v.empty() && (v[0] == '"' || v[0] == '\''))
+      {
+         size_t e = v.find(v[0], 1);
+         v = v.substr(1, e == std::string::npos ? std::string::npos : e - 1);
+      }
+      else
+      {
+         size_t h = v.find(" #");
+         if (h != std::string::npos) v = trim(v.substr(0, h));
+      }
+      ini[k] = v;
+   }
+}
+
+std::string setting(const char *key, const char *def)
+{
+   std::string env = std::string("MF_") + key;
+   if (getenv(env.c_str())) return getenv(env.c_str());
+   std::map<std::string, std::string>::const_iterator it = ini.find(key);
+   return it != ini.end() ? it->second : std::string(def);
+}
+
+std::vector<std::string> splitList(const std::string &s)
+{
+   std::vector<std::string> out;
+   std::string cur;
+   std::istringstream ss(s);
+   while (std::getline(ss, cur, ',')) { cur = trim(cur); if (!cur.empty()) out.push_back(cur); }
+   return out;
+}
+
+// Logical actions -> the keys the UI understands (see def.h)
+struct Action { const char *name; SDL_Scancode logical; const char *keys; const char *joy; };
+const Action actions[] =
+{
+   { "UP",    SDL_SCANCODE_UP,       "Up,Keypad 8",                     "" },
+   { "DOWN",  SDL_SCANCODE_DOWN,     "Down,Keypad 2",                   "" },
+   { "LEFT",  SDL_SCANCODE_LEFT,     "Left,Keypad 4",                   "" },
+   { "RIGHT", SDL_SCANCODE_RIGHT,    "Right,Keypad 6",                  "" },
+   { "A",     SDL_SCANCODE_RETURN,   "Return,Keypad Enter,Left Ctrl",   "0" },
+   { "B",     SDL_SCANCODE_ESCAPE,   "Escape,Backspace,Left Alt",       "1" },
+   { "X",     SDL_SCANCODE_SPACE,    "Space,Insert",                    "2,6" },
+   { "Y",     SDL_SCANCODE_TAB,      "Tab,Left Shift,F1,Menu",          "3,7" },
+   { "L",     SDL_SCANCODE_PAGEUP,   "PageUp,Home",                     "4" },
+   { "R",     SDL_SCANCODE_PAGEDOWN, "PageDown,End",                    "5" },
+   { "QUIT",  SDL_SCANCODE_UNKNOWN,  "",                                "" },
+};
+const int NB_ACTIONS = sizeof(actions) / sizeof(actions[0]);
+const int ACTION_QUIT = NB_ACTIONS - 1;
+
+std::map<int, int> keyToAction;      // physical SDL scancode -> action index
+std::vector<int>   joyButtons[NB_ACTIONS];   // raw joystick button numbers per action
+
+void loadBindings(void)
+{
+   for (int a = 0; a < NB_ACTIONS; ++a)
+   {
+      std::string kname = std::string("KEY_") + actions[a].name;
+      std::vector<std::string> keys = splitList(setting(kname.c_str(), actions[a].keys));
+      std::ostringstream log;
+      for (size_t i = 0; i < keys.size(); ++i)
+      {
+         SDL_Scancode sc = SDL_GetScancodeFromName(keys[i].c_str());
+         if (sc == SDL_SCANCODE_UNKNOWN)
+         {
+            // also accept a number (SDL scancode)
+            char *end = NULL;
+            long n = strtol(keys[i].c_str(), &end, 10);
+            if (end != NULL && *end == '\0' && n > 0 && n < SDL_NUM_SCANCODES && keys[i].size() > 1) sc = (SDL_Scancode)n;
+         }
+         if (sc == SDL_SCANCODE_UNKNOWN) { std::cerr << "Groovy: " << kname << ": unknown key '" << keys[i] << "'" << std::endl; continue; }
+         keyToAction[sc] = a;
+         log << " [" << SDL_GetScancodeName(sc) << "]";
+      }
+      std::string jname = std::string("JOY_") + actions[a].name;
+      std::vector<std::string> btn = splitList(setting(jname.c_str(), actions[a].joy));
+      for (size_t i = 0; i < btn.size(); ++i) joyButtons[a].push_back(atoi(btn[i].c_str()));
+      std::cout << "Groovy: " << actions[a].name << " =" << log.str() << " / joystick buttons " << setting(jname.c_str(), actions[a].joy) << std::endl;
+   }
+}
+
+std::vector<int> padsAdded;
+bool debugInput = false;    // MF_DEBUG_INPUT=1: log every physical key
+std::vector<SDL_JoystickID> padsRemoved;
+
+// Physical key from SDL (or the test input file) -> logical key
+void physicalKey(SDL_Scancode sc, bool down)
+{
+   std::map<int, int>::const_iterator it = keyToAction.find(sc);
+   if (it == keyToAction.end()) return;
+   if (it->second == ACTION_QUIT)
+   {
+      if (down) { SDL_Event q; SDL_zero(q); q.type = SDL_QUIT; SDL_PushEvent(&q); }
+      return;
+   }
+   // one source per physical key: two keys bound to the same action do not cancel out
+   setKey(2000000L + sc, actions[it->second].logical, down);
+}
+
+// Real keyboard and joystick events never reach the UI: they are translated here
+int SDLCALL eventFilter(void *, SDL_Event *e)
+{
+   switch (e->type)
+   {
+      case SDL_KEYDOWN:
+      case SDL_KEYUP:
+         if (e->key.windowID == SYNTH_WINDOW_ID)
+         {
+            if (debugInput) std::cout << "Groovy:  -> " << SDL_GetScancodeName(e->key.keysym.scancode) << (e->type == SDL_KEYDOWN ? " down" : " up") << std::endl;
+            return 1;
+         }
+         if (debugInput) std::cout << "Groovy: key " << SDL_GetScancodeName(e->key.keysym.scancode) << (e->type == SDL_KEYDOWN ? " down" : " up") << (e->key.repeat ? " (repeat)" : "") << std::endl;
+         if (e->key.repeat == 0) physicalKey(e->key.keysym.scancode, e->type == SDL_KEYDOWN);
+         return 0;
+      case SDL_TEXTINPUT:
+      case SDL_TEXTEDITING:
+         return 0;
+      case SDL_JOYDEVICEADDED: padsAdded.push_back(e->jdevice.which); return 0;
+      case SDL_JOYDEVICEREMOVED: padsRemoved.push_back(e->jdevice.which); return 0;
+      default:
+         if (e->type >= SDL_JOYAXISMOTION && e->type <= SDL_CONTROLLERSENSORUPDATE) return 0;
+         return 1;
+   }
+}
+#endif
 
 SDL_Scancode linuxToSdl(int code)
 {
@@ -189,7 +347,11 @@ void readEvdev(void)
          for (size_t k = 0; k < n / sizeof(struct input_event); ++k)
          {
             if (ev[k].type != EV_KEY || ev[k].value == 2) continue;   // ignore autorepeat
+            #if defined(DEVICE_GROOVY)
+            physicalKey(linuxToSdl(ev[k].code), ev[k].value != 0);   // test hook only (MF_INPUT_FILE)
+            #else
             setKey(evdevs[i].fd, linuxToSdl(ev[k].code), ev[k].value != 0);
+            #endif
          }
       }
       if (dead)
@@ -205,7 +367,7 @@ void readEvdev(void)
 // --------------------------------------------------------- SDL joystick ----
 void openPad(int index)
 {
-   Pad p; p.joy = NULL; p.gc = NULL;
+   Pad p; p.joy = NULL; p.gc = NULL; p.quitHeld = false;
    if (SDL_IsGameController(index))
    {
       p.gc = SDL_GameControllerOpen(index);
@@ -214,7 +376,13 @@ void openPad(int index)
    if (p.joy == NULL) p.joy = SDL_JoystickOpen(index);
    if (p.joy == NULL) return;
    p.id = SDL_JoystickInstanceID(p.joy);
-   for (size_t i = 0; i < pads.size(); ++i) if (pads[i].id == p.id) return;
+   for (size_t i = 0; i < pads.size(); ++i)
+      if (pads[i].id == p.id)
+      {
+         // already open (startup scan + its DEVICEADDED event): drop the extra reference
+         if (p.gc) SDL_GameControllerClose(p.gc); else SDL_JoystickClose(p.joy);
+         return;
+      }
    std::cout << "MiSTer: gamepad " << SDL_JoystickName(p.joy) << (p.gc ? " (GameController)" : " (raw joystick)") << std::endl;
    pads.push_back(p);
 }
@@ -266,12 +434,25 @@ void pollPads(void)
             up |= y < -T; down |= y > T; left |= x < -T; right |= x > T;
          }
          int nb = SDL_JoystickNumButtons(j);
+         #if defined(DEVICE_GROOVY)
+         // raw joysticks (arcade encoders in joystick mode): buttons from JOY_A=... in the ini
+         bool *dst[6] = { &a, &b, &sel, &menu, &pgu, &pgd };
+         for (int k = 0; k < 6; ++k)
+            for (size_t n = 0; n < joyButtons[4 + k].size(); ++n)
+               if (joyButtons[4 + k][n] < nb && SDL_JoystickGetButton(j, joyButtons[4 + k][n])) *dst[k] = true;
+         bool quit = false;
+         for (size_t n = 0; n < joyButtons[ACTION_QUIT].size(); ++n)
+            if (joyButtons[ACTION_QUIT][n] < nb && SDL_JoystickGetButton(j, joyButtons[ACTION_QUIT][n])) quit = true;
+         if (quit && !p.quitHeld) { SDL_Event q; SDL_zero(q); q.type = SDL_QUIT; SDL_PushEvent(&q); }
+         p.quitHeld = quit;
+         #else
          a    = nb > 0 && SDL_JoystickGetButton(j, 0);
          b    = nb > 1 && SDL_JoystickGetButton(j, 1);
          sel  = (nb > 2 && SDL_JoystickGetButton(j, 2)) || (nb > 6 && SDL_JoystickGetButton(j, 6));
          menu = (nb > 3 && SDL_JoystickGetButton(j, 3)) || (nb > 7 && SDL_JoystickGetButton(j, 7));
          pgu  = nb > 4 && SDL_JoystickGetButton(j, 4);
          pgd  = nb > 5 && SDL_JoystickGetButton(j, 5);
+         #endif
       }
       long src = 1000000L + p.id;
       setKey(src, SDL_SCANCODE_UP, up);
@@ -287,6 +468,7 @@ void pollPads(void)
    }
 }
 
+
 // -------------------------------------------------------------- console ----
 void consoleRestore(void)
 {
@@ -297,6 +479,7 @@ void consoleRestore(void)
    ttyModeSet = ttyTermiosSet = false;
 }
 
+#if !defined(DEVICE_GROOVY)
 void consoleSetup(void)
 {
    const char *names[] = { "/dev/tty", "/dev/tty0" };
@@ -317,6 +500,7 @@ void consoleSetup(void)
       if (tcsetattr(ttyFd, TCSANOW, &t) == 0) ttyTermiosSet = true;
    }
 }
+#endif
 
 void signalHandler(int sig)
 {
@@ -343,6 +527,106 @@ void saveScreenshot(void)
 
 //------------------------------------------------------------------------------
 
+#if defined(DEVICE_GROOVY)
+SDL_Renderer *MiSTer::init(void)
+{
+   screenshotPath = getenv("MF_SCREENSHOT");
+   loadIni();
+
+   // Physical aspect of the TV, for the overscan side margins (ASPECT=4:3, 16:9, 1.333...)
+   {
+      std::string a = setting("ASPECT", "4:3");
+      double n = 0, d = 0;
+      if (sscanf(a.c_str(), "%lf:%lf", &n, &d) == 2 && n > 0 && d > 0) displayAspect = n / d;
+      else if (atof(a.c_str()) > 0.5) displayAspect = atof(a.c_str());
+   }
+
+   // Window: fullscreen on the current mode (what switchres/the frontend set up), or a given mode
+   SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+   SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+   std::cout << "Groovy: SDL video driver " << (SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?") << std::endl;
+   // X11: copy frames with plain X (XShm), no OpenGL needed. KMSDRM needs SDL's GLES path.
+   const char *drv = SDL_GetCurrentVideoDriver();
+   if (drv != NULL && strcmp(drv, "x11") == 0 && atoi(setting("X11_OPENGL", "0").c_str()) == 0)
+      SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
+   SDL_DisplayMode desk;
+   if (SDL_GetDesktopDisplayMode(0, &desk) == 0)
+      std::cout << "Groovy: desktop mode " << desk.w << "x" << desk.h << " @" << desk.refresh_rate << "Hz" << std::endl;
+   else { desk.w = 640; desk.h = 480; desk.refresh_rate = 0; }
+
+   int reqW = 0, reqH = 0;
+   std::string mode = setting("VIDEO_MODE", "desktop");    // desktop | WxH
+   sscanf(mode.c_str(), "%dx%d", &reqW, &reqH);
+   const bool windowed = atoi(setting("WINDOWED", "0").c_str()) != 0;
+   Uint32 flags = SDL_WINDOW_SHOWN;
+   if (windowed) { winW = reqW > 0 ? reqW : 640; winH = reqH > 0 ? reqH : 480; }
+   else if (reqW > 0 && reqH > 0) { winW = reqW; winH = reqH; flags |= SDL_WINDOW_FULLSCREEN; }
+   else { winW = desk.w; winH = desk.h; flags |= SDL_WINDOW_FULLSCREEN_DESKTOP; }
+
+   window = SDL_CreateWindow("MiSTerFiles", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH, flags);
+   if (window == NULL) { std::cerr << "Groovy: window: " << SDL_GetError() << std::endl; return NULL; }
+   if ((flags & SDL_WINDOW_FULLSCREEN) == SDL_WINDOW_FULLSCREEN)
+   {
+      // exact mode switch: closest mode the display offers
+      SDL_DisplayMode want = { 0, reqW, reqH, 0, 0 }, got;
+      if (SDL_GetClosestDisplayMode(0, &want, &got) != NULL) SDL_SetWindowDisplayMode(window, &got);
+   }
+   SDL_ShowCursor(SDL_DISABLE);
+   SDL_GetWindowSize(window, &winW, &winH);
+
+   // Logical UI size: the window size, or RENDER_SIZE=WxH (then scaled to the window)
+   screenW = winW; screenH = winH;
+   int rw = 0, rh = 0;
+   if (sscanf(setting("RENDER_SIZE", "").c_str(), "%dx%d", &rw, &rh) == 2 && rw >= 160 && rh >= 120) { screenW = rw; screenH = rh; }
+   std::cout << "Groovy: window " << winW << "x" << winH << (windowed ? " (windowed)" : " (fullscreen)") << ", UI " << screenW << "x" << screenH << std::endl;
+
+   std::string lr = setting("LOWRES", "auto");
+   lowRes = (lr == "auto" || lr.empty()) ? (screenH < 400) : (atoi(lr.c_str()) != 0);
+
+   backSurface = SDL_CreateRGBSurfaceWithFormat(0, screenW, screenH, 32, SDL_PIXELFORMAT_XRGB8888);
+   if (backSurface == NULL) { std::cerr << "Groovy: surface: " << SDL_GetError() << std::endl; return NULL; }
+   renderer = SDL_CreateSoftwareRenderer(backSurface);
+   if (renderer == NULL) { std::cerr << "Groovy: renderer: " << SDL_GetError() << std::endl; return NULL; }
+   setOverscan(atoi(setting("OVERSCAN", "0").c_str()));
+   std::cout << "Groovy: overscan " << overscan << "% (aspect " << displayAspect << ") -> margins " << marginX << "x" << marginY
+             << ", safe area " << (screenW - 2 * marginX) << "x" << (screenH - 2 * marginY) << std::endl;
+
+   signal(SIGINT, signalHandler);
+   signal(SIGTERM, signalHandler);
+   signal(SIGHUP, signalHandler);
+
+   // Input: keyboard events from SDL + gamepads, translated by the bindings
+   loadBindings();
+   debugInput = getenv("MF_DEBUG_INPUT") && atoi(getenv("MF_DEBUG_INPUT")) != 0;
+   SDL_SetEventFilter(eventFilter, NULL);
+   useJoystick = atoi(setting("JOYSTICK", "1").c_str()) != 0;
+   if (useJoystick)
+   {
+      if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0)
+      {
+         std::string db = setting("GAMECONTROLLERDB", "./res/gamecontrollerdb.txt");
+         int n = SDL_GameControllerAddMappingsFromFile(db.c_str());
+         if (n > 0) std::cout << "Groovy: loaded " << n << " controller mappings from " << db << std::endl;
+         SDL_PumpEvents();
+         padsAdded.clear();
+         for (int i = 0; i < SDL_NumJoysticks(); ++i) openPad(i);
+      }
+      else
+      {
+         std::cerr << "Groovy: SDL gamecontroller init failed: " << SDL_GetError() << std::endl;
+         useJoystick = false;
+      }
+   }
+   if (getenv("MF_INPUT_FILE"))
+   {
+      int fd = open(getenv("MF_INPUT_FILE"), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+      if (fd >= 0) { EvDev d; d.path = getenv("MF_INPUT_FILE"); d.fd = fd; evdevs.push_back(d); }
+   }
+   lastScan = SDL_GetTicks();
+   return renderer;
+}
+#else
 SDL_Renderer *MiSTer::init(void)
 {
    const char *fbPath = getenv("MF_FBDEV") ? getenv("MF_FBDEV") : "/dev/fb0";
@@ -437,6 +721,7 @@ SDL_Renderer *MiSTer::init(void)
    lastScan = SDL_GetTicks();
    return renderer;
 }
+#endif
 
 //------------------------------------------------------------------------------
 
@@ -449,9 +734,9 @@ int MiSTer::overscanMarginY(int pct)
 
 int MiSTer::overscanMarginX(int pct)
 {
-   // Same physical size as the vertical margin on a 4:3 display:
+   // Same physical size as the vertical margin on a 4:3 (displayAspect) display:
    // pixel aspect = (4/3) / (W/H)  =>  marginX = marginY * (W/H) * 3/4
-   return (int)lround(overscanMarginY(pct) * ((double)screenW / screenH) * 0.75);
+   return (int)lround(overscanMarginY(pct) * ((double)screenW / screenH) / displayAspect);
 }
 
 void MiSTer::setOverscan(int pct)
@@ -522,7 +807,7 @@ bool MiSTer::saveSetting(const char *key, int value)
    }
    if (!ok) { std::cerr << "MiSTer: cannot save " << path << ": " << strerror(errno) << std::endl; unlink(tmp.c_str()); return false; }
    sync();
-   std::cout << "MiSTer: saved " << val.str() << " in " << path << std::endl;
+   std::cout << "MiSTerFiles: saved " << val.str() << " in " << path << std::endl;
    return true;
 }
 
@@ -544,6 +829,15 @@ void MiSTer::present(void)
       SDL_SetClipRect(backSurface, &clip);
    }
    if (screenshotPath != NULL) saveScreenshot();   // debug aid (MF_SCREENSHOT=/tmp/x.ppm)
+   #if defined(DEVICE_GROOVY)
+   if (window == NULL || backSurface == NULL) return;
+   SDL_Surface *ws = SDL_GetWindowSurface(window);   // re-created by SDL if the window changed
+   if (ws == NULL) { static bool told = false; if (!told) { std::cerr << "Groovy: window surface: " << SDL_GetError() << std::endl; told = true; } return; }
+   if (ws->w == screenW && ws->h == screenH) SDL_BlitSurface(backSurface, NULL, ws, NULL);
+   else SDL_BlitScaled(backSurface, NULL, ws, NULL);   // RENDER_SIZE != window size: nearest-neighbour stretch
+   SDL_UpdateWindowSurface(window);
+   return;
+   #endif
    if (fbMem == NULL || backSurface == NULL) return;
    const int rowBytes = screenW * backSurface->format->BytesPerPixel;
    uint8_t *dst = fbMem + fbOffset;
@@ -556,6 +850,14 @@ void MiSTer::present(void)
 
 void MiSTer::pumpInput(void)
 {
+   #if defined(DEVICE_GROOVY)
+   readEvdev();          // only the MF_INPUT_FILE test hook
+   SDL_PumpEvents();     // keyboard/joystick events go through eventFilter
+   while (!padsAdded.empty()) { int i = padsAdded.back(); padsAdded.pop_back(); if (useJoystick) openPad(i); }
+   while (!padsRemoved.empty()) { SDL_JoystickID id = padsRemoved.back(); padsRemoved.pop_back(); closePad(id); }
+   if (useJoystick) pollPads();
+   return;
+   #endif
    // Hotplug: rescan input devices every second
    if (SDL_GetTicks() - lastScan > 1000) { scanEvdev(); lastScan = SDL_GetTicks(); }
    readEvdev();
@@ -598,6 +900,10 @@ void MiSTer::close(void)
    while (!pads.empty()) closePad(pads.back().id);
    renderer = NULL;   // destroyed by SDLUtils::close() before calling us
    if (backSurface) { SDL_FreeSurface(backSurface); backSurface = NULL; }
+   #if defined(DEVICE_GROOVY)
+   SDL_SetEventFilter(NULL, NULL);
+   if (window) { SDL_DestroyWindow(window); window = NULL; }
+   #endif
 }
 
-#endif // DEVICE_MISTER
+#endif // DEVICE_MISTER || DEVICE_GROOVY

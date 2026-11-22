@@ -1,5 +1,5 @@
 // MiSTerFiles: "Tela / Overscan" adjust screen (MiSTer only)
-#ifdef DEVICE_MISTER
+#ifdef MF_PLATFORM
 
 #include <string>
 #include <sstream>
@@ -91,4 +91,4 @@ int OverscanScreen::run(void)
    return result;
 }
 
-#endif // DEVICE_MISTER
+#endif // MF_PLATFORM

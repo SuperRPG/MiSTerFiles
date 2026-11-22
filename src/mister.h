@@ -11,6 +11,13 @@
 //   Optionally (MF_JOYSTICK=1) gamepads are also read through SDL
 //   GameController / raw SDL joystick and translated to the same keys.
 // Everything ends up as synthesized SDL_KEYDOWN/SDL_KEYUP events.
+//
+// The same layer also serves the GroovyArcade / x86_64 Linux target (DEVICE_GROOVY):
+// - Video: normal SDL2 video driver (KMSDRM or X11, picked by SDL), fullscreen window;
+//   the frame is still rendered in software into an SDL_Surface and copied (scaled if
+//   needed) to the window surface on every present.
+// - Input: SDL keyboard events and SDL GameController/joystick, translated through the
+//   configurable bindings in MiSTerFiles.ini (KEY_A=..., JOY_A=...) into the same keys.
 
 #include <SDL.h>
 
@@ -29,6 +36,7 @@ namespace MiSTer
    extern int marginX;     // pixels
    extern int marginY;     // pixels
    const int OVERSCAN_MAX = 15;
+   extern double displayAspect;   // physical aspect of the TV (4:3 by default; ASPECT=16:9 on GroovyArcade)
    int  overscanMarginX(int pct);
    int  overscanMarginY(int pct);
    // Change overscan and apply the viewport
@@ -36,7 +44,7 @@ namespace MiSTer
    // Persist KEY=value in MiSTerFiles.ini (keeps other lines/comments, creates from example)
    bool saveSetting(const char *key, int value);
 
-   // Open framebuffer and create software renderer. Returns NULL on failure.
+   // Open framebuffer (MiSTer) / window (GroovyArcade) and create software renderer. NULL on failure.
    SDL_Renderer *init(void);
    // Copy rendered frame to framebuffer
    void present(void);

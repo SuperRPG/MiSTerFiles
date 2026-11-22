@@ -10,7 +10,7 @@
 #include "textViewer.h"
 #include "textEditor.h"
 #include "imageViewer.h"
-#if defined(DEVICE_MISTER)
+#if defined(MF_PLATFORM)
 #include "overscan.h"
 #endif
 
@@ -391,7 +391,7 @@ void MainWindow::openContextMenu(void)
       l_dialog.addOption("Select all", 5, g_iconSelect);
       l_dialog.addOption("Select none", 6, g_iconNone);
       l_dialog.addOption("New directory", 7, g_iconNewDir);
-      #if defined(DEVICE_MISTER)
+      #if defined(MF_PLATFORM)
       l_dialog.addOption("Tela / Overscan", 10, g_iconImage);
       #endif
       l_dialog.addOption("Quit", 8, g_iconQuit);
@@ -450,7 +450,7 @@ void MainWindow::openContextMenu(void)
       case 8:
          m_retVal = 0;
          break;
-      #if defined(DEVICE_MISTER)
+      #if defined(MF_PLATFORM)
       // Screen / overscan adjust
       case 10:
       {

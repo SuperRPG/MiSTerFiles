@@ -62,7 +62,7 @@ int IWindow::execute(void)
       l_time = SDL_GetTicks();
 
       // Handle events
-      #if defined(DEVICE_MISTER)
+      #if defined(MF_PLATFORM)
       MiSTer::pumpInput();
       #endif
       while (SDL_PollEvent(&event) != 0 )
@@ -216,7 +216,7 @@ void IWindow::renderAll(void)
 void IWindow::renderPresent(void)
 {
    SDL_RenderPresent(g_renderer);
-   #if defined(DEVICE_MISTER)
+   #if defined(MF_PLATFORM)
    MiSTer::present();
    #elif !defined(DEVICE_PC)
    SDL_RenderPresent(g_renderer);

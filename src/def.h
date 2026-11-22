@@ -10,9 +10,9 @@
 
 #define APP_NAME "MiSTerFiles"
 
-// Parameters for MiSTer FPGA (DE10-Nano). Screen size comes from the
-// framebuffer at runtime; a compact layout is used below 400 lines (CRT 240p).
-#if defined(DEVICE_MISTER)
+// Parameters for MiSTer FPGA (DE10-Nano) and GroovyArcade (x86_64, MF_PLATFORM). Screen size
+// comes from the framebuffer/window at runtime; a compact layout is used below 400 lines (CRT 240p).
+#if defined(MF_PLATFORM)
    #include "mister.h"
    // Size of the safe area (screen minus overscan margins); drawing is offset by the viewport
    #define SCREEN_WIDTH             (MiSTer::screenW - 2 * MiSTer::marginX)
@@ -169,7 +169,7 @@
 #define VIEWER_SCROLL_SPEED      20
 
 // Button events
-#if defined(DEVICE_MISTER)
+#if defined(MF_PLATFORM)
    // Everything arrives as keys (keyboard, Main_MiSTer virtual input from the mapped
    // gamepad, or SDL gamepads translated in mister.cpp):
    // arrows = move, Enter/A = open, Esc/Backspace/B = back, Space/Insert/X = select,

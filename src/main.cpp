@@ -46,7 +46,7 @@ SDL_Texture *g_iconPlus = NULL;
 
 int main(int argc, char* args[])
 {
-   #if defined(DEVICE_MISTER)
+   #if defined(MF_PLATFORM)
    // Resources are found relative to the executable (./res), whatever the cwd
    {
       char exe[PATH_MAX];

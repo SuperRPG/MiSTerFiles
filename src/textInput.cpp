@@ -44,11 +44,13 @@ void TextInput::render(const bool p_focus)
    SDL_SetRenderDrawColor(g_renderer, COLOR_TITLE_BG, 255);
    SDL_RenderFillRect(g_renderer, &m_dialogBackground);
 
-   // Dialog icon
+   // Dialog icon + title (skipped when the keyboard leaves no room for them, e.g. 240 lines + overscan)
+   if (m_dialogBackground.y >= 0) {
    SDLUtils::renderTexture(m_icon, m_dialogBackground.x + MARGIN_X, m_dialogBackground.y + LINE_HEIGHT/2, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
 
    // Dialog title
    SDLUtils::renderText(m_title, g_font, m_dialogBackground.x + MARGIN_X + ICON_SIZE + MARGIN_X, m_dialogBackground.y + LINE_HEIGHT/2, {COLOR_TEXT_NORMAL}, {COLOR_TITLE_BG}, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
+   }
 
    // Dialog body
    SDL_SetRenderDrawColor(g_renderer, COLOR_BODY_BG, 255);

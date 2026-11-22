@@ -12,7 +12,10 @@ bool SDLUtils::init()
    INHIBIT(std::cout << "SDLUtils::Init()" << std::endl;)
 
    // Initialize SDL
-   #if defined(DEVICE_MISTER)
+   #if defined(DEVICE_GROOVY)
+   // GroovyArcade: normal SDL video (KMSDRM or X11), window + gamepads opened in MiSTer::init()
+   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0)
+   #elif defined(MF_PLATFORM)
    // No X/KMS on MiSTer: no SDL video driver needed, we render in software
    // and copy to /dev/fb0 ourselves (see mister.cpp). Gamepads are opened in
    // MiSTer::init() only when MF_JOYSTICK=1.
@@ -40,11 +43,11 @@ bool SDLUtils::init()
       return false;
    }
 
-   #if defined(DEVICE_MISTER)
+   #if defined(MF_PLATFORM)
    g_renderer = MiSTer::init();
    if (g_renderer == NULL)
    {
-      std::cerr << "MiSTer video/input init failed" << std::endl;
+      std::cerr << "MiSTerFiles video/input init failed" << std::endl;
       return false;
    }
    return true;
@@ -104,7 +107,7 @@ void SDLUtils::close()
       g_renderer = NULL;
    }
 
-   #if defined(DEVICE_MISTER)
+   #if defined(MF_PLATFORM)
    MiSTer::close();
    #endif
 
