@@ -1,0 +1,58 @@
+# MiSTerFiles (GroovyArcade) - configuracao
+# O launcher cria MiSTerFiles.ini a partir deste exemplo na primeira execucao.
+# Formato: CHAVE=valor (valores com espaco entre aspas). Linhas com # sao comentarios.
+
+# Pasta inicial (padrao: a home do usuario, ex. /home/arcade)
+#START_DIR=/home/arcade
+
+# Margem de seguranca (overscan) em % da altura da tela, igual nos 4 lados (0-15).
+# Ajuste pelo proprio app: Y (Tab / Shift esquerdo) -> "Tela / Overscan". O app grava aqui.
+OVERSCAN=0
+
+# Proporcao fisica da TV, usada para a margem lateral ficar do mesmo tamanho visual (4:3 ou 16:9)
+ASPECT=4:3
+
+# Video: auto (X11 se houver $DISPLAY, senao KMS/DRM), x11 ou kmsdrm
+VIDEO_DRIVER=auto
+# Modo de video: desktop = usa o modo atual da tela (recomendado no CRT/switchres),
+# ou LxA para pedir um modo, ex. 640x480 ou 320x240 (precisa existir na lista de modos)
+VIDEO_MODE=desktop
+# Resolucao interna da interface (vazio = igual a tela). Ex.: RENDER_SIZE=640x240 numa tela 640x480i
+RENDER_SIZE=
+# Layout compacto (fonte menor): auto (quando a altura < 400 linhas), 1 = sempre, 0 = nunca
+LOWRES=auto
+# 1 = janela em vez de tela cheia (testes)
+WINDOWED=0
+
+# Controles por teclado / encoder de arcade (nomes de tecla do SDL, separados por virgula).
+# Exemplos de nomes: Up Down Left Right Return Escape Space Tab Backspace "Left Ctrl"
+# "Left Alt" "Left Shift" "Right Ctrl" PageUp PageDown Home End Insert 1 2 5 6 Z X F1 F10
+KEY_UP="Up,Keypad 8"
+KEY_DOWN="Down,Keypad 2"
+KEY_LEFT="Left,Keypad 4"
+KEY_RIGHT="Right,Keypad 6"
+# A = abrir / confirmar
+KEY_A="Return,Keypad Enter,Left Ctrl"
+# B = voltar / cancelar
+KEY_B="Escape,Backspace,Left Alt"
+# X = selecionar arquivo
+KEY_X="Space,Insert"
+# Y = menu de contexto (copiar, mover, renomear, Tela / Overscan, sair...)
+KEY_Y="Tab,Left Shift,F1,Menu"
+# L / R = pagina acima / abaixo
+KEY_L="PageUp,Home"
+KEY_R="PageDown,End"
+# Sair direto do app (vazio = so pelo menu Y -> Quit). Ex.: KEY_QUIT="F10"
+KEY_QUIT=
+
+# Joystick / gamepad (1 = ligado). Gamepads conhecidos usam o layout padrao
+# (A, B, X, Y, LB, RB, Start = menu, Back = selecionar). Joysticks "crus" (encoders
+# de arcade em modo joystick) usam os numeros de botao abaixo (0 = primeiro botao).
+JOYSTICK=1
+JOY_A="0"
+JOY_B="1"
+JOY_X="2,6"
+JOY_Y="3,7"
+JOY_L="4"
+JOY_R="5"
+JOY_QUIT=

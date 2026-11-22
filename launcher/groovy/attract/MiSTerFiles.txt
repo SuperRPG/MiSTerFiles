@@ -1,0 +1,2 @@
+#Name;Title;Emulator;CloneOf;Year;Manufacturer;Category;Players;Rotation;Control;Status;DisplayCount;DisplayType;AltRomname;AltTitle;Extra;Buttons;Series;Language;Region;Rating
+MiSTerFiles;MiSTerFiles - Gerenciador de arquivos;MiSTerFiles;;2026;MiSTerFiles;Utilities;1;0;joystick;good;1;raster;;;;;;;;

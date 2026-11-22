@@ -1,3 +1,19 @@
+# Built binary and object files
+MiSTerFiles
 MiSTerFiles.geany
 *.o
-MiSTerFiles
+
+# Downloaded / built dependencies (rebuild with the scripts)
+deps/
+
+# Packaging output (attach release zips to GitHub Releases, do not commit them)
+dist/
+dist-groovy/
+*.zip
+*.tar.gz
+*.deb
+
+# Editor / OS junk
+*~
+*.swp
+.DS_Store

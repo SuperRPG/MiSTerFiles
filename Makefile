@@ -21,7 +21,7 @@ endif
 
 ifeq ($(DEVICE),MISTER)
 	# Cross-compiled, fully static (no dependency on the MiSTer rootfs glibc/SDL)
-	MISTER_PREFIX ?= $(CURDIR)/../deps/prefix
+	MISTER_PREFIX ?= $(CURDIR)/deps/prefix
 	CC = arm-linux-gnueabihf-g++
 	STRIP = arm-linux-gnueabihf-strip
 	SDL2_CONFIG = $(MISTER_PREFIX)/bin/sdl2-config
@@ -36,8 +36,8 @@ ifeq ($(DEVICE),GROOVY)
 	# SDL2/SDL2_image/SDL2_ttf/FreeType are static; libstdc++/libgcc are static; the only
 	# dynamic libraries are glibc's (libc, libm, libdl, libpthread, librt). SDL dlopen()s
 	# X11 or DRM/GBM/EGL/GLES and udev from the system at runtime.
-	GROOVY_PREFIX ?= $(CURDIR)/../deps/prefix-x86_64
-	GLIBC_SYSROOT ?= $(CURDIR)/../deps/sysroot-glibc228
+	GROOVY_PREFIX ?= $(CURDIR)/deps/prefix-x86_64
+	GLIBC_SYSROOT ?= $(CURDIR)/deps/sysroot-glibc228
 	CC = g++
 	CCC = gcc
 	STRIP = strip

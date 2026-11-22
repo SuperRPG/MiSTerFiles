@@ -1,0 +1,1884 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000..e736f24
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1,3 @@
++*.sh text eol=lf
++*.ini text eol=lf
++*.txt text eol=lf
+diff --git a/.gitignore b/.gitignore
+index 2f4cb7e..eb1376e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1 +1,3 @@
+-351Files.geany
++MiSTerFiles.geany
++*.o
++MiSTerFiles
+diff --git a/Makefile b/Makefile
+index 0e471f5..ab65d2b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-TARGET = 351Files
++TARGET = MiSTerFiles
+ 
+ # DEVICE ?= RG351P
+ # DEVICE ?= RG351V
+@@ -6,6 +6,8 @@ TARGET = 351Files
+ # DEVICE ?= RGB10
+ # DEVICE ?= RK2020
+ # DEVICE ?= CHI
++# DEVICE ?= MISTER   (see build_MiSTer.sh)
++# DEVICE ?= GROOVY   (GroovyArcade / x86_64 Linux, see build_GroovyArcade.sh)
+ DEVICE ?= PC
+ 
+ START_PATH ?= "/"
+@@ -17,16 +19,55 @@ ifeq ($(DEVICE),PC)
+ 	START_PATH = $(PWD)
+ endif
+ 
++ifeq ($(DEVICE),MISTER)
++	# Cross-compiled, fully static (no dependency on the MiSTer rootfs glibc/SDL)
++	MISTER_PREFIX ?= $(CURDIR)/../deps/prefix
++	CC = arm-linux-gnueabihf-g++
++	STRIP = arm-linux-gnueabihf-strip
++	SDL2_CONFIG = $(MISTER_PREFIX)/bin/sdl2-config
++	START_PATH = /media/fat
++	EXTRA_CFLAGS = -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -O2 -I$(MISTER_PREFIX)/include/SDL2
++	EXTRA_LDFLAGS = -static -L$(MISTER_PREFIX)/lib -lSDL2_image -lSDL2_ttf -lfreetype $(MISTER_PREFIX)/lib/libSDL2.a -lpthread -lm -ldl -lrt
++	EXTRA_CFLAGS += -DMF_PLATFORM
++endif
++
++ifeq ($(DEVICE),GROOVY)
++	# x86_64, built against a glibc 2.28 sysroot (runs on any distro with glibc >= 2.28).
++	# SDL2/SDL2_image/SDL2_ttf/FreeType are static; libstdc++/libgcc are static; the only
++	# dynamic libraries are glibc's (libc, libm, libdl, libpthread, librt). SDL dlopen()s
++	# X11 or DRM/GBM/EGL/GLES and udev from the system at runtime.
++	GROOVY_PREFIX ?= $(CURDIR)/../deps/prefix-x86_64
++	GLIBC_SYSROOT ?= $(CURDIR)/../deps/sysroot-glibc228
++	CC = g++
++	CCC = gcc
++	STRIP = strip
++	SDL2_CONFIG = $(GROOVY_PREFIX)/bin/sdl2-config
++	START_PATH = /
++	SYSROOT_FLAGS = --sysroot=$(GLIBC_SYSROOT)
++	EXTRA_CFLAGS = $(SYSROOT_FLAGS) -march=x86-64 -mtune=generic -O2 -I$(GROOVY_PREFIX)/include/SDL2 -DMF_PLATFORM
++	EXTRA_LDFLAGS = $(SYSROOT_FLAGS) -B$(GLIBC_SYSROOT)/usr/lib/x86_64-linux-gnu/ -L$(GLIBC_SYSROOT)/usr/lib/x86_64-linux-gnu -L$(GLIBC_SYSROOT)/lib/x86_64-linux-gnu \
++		-static-libstdc++ -static-libgcc -L$(GROOVY_PREFIX)/lib -lSDL2_image -lSDL2_ttf -lfreetype $(GROOVY_PREFIX)/lib/libSDL2.a \
++		-Wl,--push-state,--no-as-needed -lpthread -lm -ldl -lrt -Wl,--pop-state -Wl,--gc-sections -Wl,-z,noexecstack
++	COMPAT_OBJ = src/compat/glibc_compat.o
++endif
++
+ SRC = $(wildcard src/*.cpp)
+ OBJ = $(patsubst %cpp,%o,$(SRC))
+-COMPILER_FLAGS =  $(shell $(SDL2_CONFIG) --cflags) -Wall -pedantic -Wfatal-errors -DDEVICE_$(DEVICE) -DSTART_PATH=\"$(START_PATH)\" -DRES_PATH=\"$(RES_PATH)\"
++COMPILER_FLAGS =  $(shell $(SDL2_CONFIG) --cflags) -Wall -pedantic -Wfatal-errors -DDEVICE_$(DEVICE) -DSTART_PATH=\"$(START_PATH)\" -DRES_PATH=\"$(RES_PATH)\" $(EXTRA_CFLAGS)
++ifneq ($(filter MISTER GROOVY,$(DEVICE)),)
++LINKER_FLAGS = $(EXTRA_LDFLAGS)
++else
+ LINKER_FLAGS = $(shell $(SDL2_CONFIG) --libs) -lSDL2_image -lSDL2_ttf
++endif
+ 
+-all : $(OBJ)
+-	$(CC) $(OBJ) -o $(TARGET) $(LINKER_FLAGS)
++all : $(OBJ) $(COMPAT_OBJ)
++	$(CC) $(OBJ) $(COMPAT_OBJ) -o $(TARGET) $(LINKER_FLAGS)
+ 
+ %.o:%.cpp
+ 	$(CC) -c $< -o $@ $(COMPILER_FLAGS)
+ 
++src/compat/glibc_compat.o : src/compat/glibc_compat.c
++	$(CCC) -c $< -o $@ $(SYSROOT_FLAGS) -O2 -Wall
++
+ clean :
+-	rm -f $(OBJ) $(TARGET)
++	rm -f $(OBJ) $(TARGET) src/compat/*.o
+diff --git a/README-upstream.md b/README-upstream.md
+new file mode 100644
+index 0000000..59439b1
+--- /dev/null
++++ b/README-upstream.md
+@@ -0,0 +1,56 @@
++# 351Files
++A single panel file Manager tailored for Anbernic 351 devices: RG351V and RG351P. Can be easily adapted to any Linux-based device.
++
++Based on DinguxCommander.
++* Original page: https://tardigrade-nx.github.io/2011/dinguxcommander
++
++<p align="center">
++  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/01.png" alt="Screenshot 1"><br /><br />
++  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/02.png" alt="Screenshot 2"><br /><br />
++  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/03.png" alt="Screenshot 3"><br /><br />
++  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/04.png" alt="Screenshot 4"><br /><br />
++</p>
++
++# Features:
++* Single panel file manager
++* Copy, move, rename, delete, create directories and files.
++* Display file size, compute directory size
++* Text file viewer
++* Text file editor
++* Image viewer (original size or fit screen, next / previous image)
++
++# Installation on 351ELEC:
++351Files is now integrated in 351ELEC by default.
++
++# Installation on ArkOS:
++351Files is now integrated in ArkOS by default.
++
++# Buttons:
++* d-pad: move
++* A: open / validate
++* B: cancel / back
++* X: open context menu
++* Y: select / unselect item
++* R1/R2: page down
++* L1/L2: page up
++
++Image viewer:
++* d-pad: next / previous image, or scroll image
++* A: switch original size / fit screen
++
++Text editor:
++* d-pad: move
++* A: open virtual keyboard / validate
++* B: cancel / back
++* X: open context menu
++* Y + d-pad: select text
++* R1/R2: page down
++* L1/L2: page up
++
++# Compilation:
++Define the following variables when executing 'make':
++* CC
++* SDL2_CONFIG
++* DEVICE: CHI / RG351P / RG351V / RGB10 / RK2020 / PC
++* START_PATH
++* RES_PATH
+diff --git a/README.md b/README.md
+index 59439b1..845b87a 100644
+--- a/README.md
++++ b/README.md
+@@ -1,56 +1,26 @@
+-# 351Files
+-A single panel file Manager tailored for Anbernic 351 devices: RG351V and RG351P. Can be easily adapted to any Linux-based device.
++# MiSTerFiles
+ 
+-Based on DinguxCommander.
+-* Original page: https://tardigrade-nx.github.io/2011/dinguxcommander
++A single panel file manager for the MiSTer FPGA (DE10-Nano), runnable from the
++MiSTer Scripts menu and controlled with a gamepad or keyboard. Also builds for
++GroovyArcade (x86_64 Linux arcade cabinets).
+ 
+-<p align="center">
+-  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/01.png" alt="Screenshot 1"><br /><br />
+-  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/02.png" alt="Screenshot 2"><br /><br />
+-  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/03.png" alt="Screenshot 3"><br /><br />
+-  <img src="https://raw.githubusercontent.com/Tardigrade-nx/351Files/master/screenshots/04.png" alt="Screenshot 4"><br /><br />
+-</p>
++## Credits / license
+ 
+-# Features:
+-* Single panel file manager
+-* Copy, move, rename, delete, create directories and files.
+-* Display file size, compute directory size
+-* Text file viewer
+-* Text file editor
+-* Image viewer (original size or fit screen, next / previous image)
++MiSTerFiles is a fork of **351Files** by Tardigrade-nx
++(https://github.com/Tardigrade-nx/351Files), itself based on DinguxCommander.
++It is distributed under the same license as the upstream project (GPLv3).
++The original upstream README is kept in `README-upstream.md`.
+ 
+-# Installation on 351ELEC:
+-351Files is now integrated in 351ELEC by default.
++MiSTer-specific code: `src/mister.cpp`, `src/mister.h`, the `DEVICE_MISTER`
++blocks in `src/def.h`, `src/sdlutils.cpp`, `src/window.cpp`, `src/main.cpp`
++and the `MISTER` target in the `Makefile`.
+ 
+-# Installation on ArkOS:
+-351Files is now integrated in ArkOS by default.
++Build: see `../build_MiSTer.sh` (`make DEVICE=MISTER`).
+ 
+-# Buttons:
+-* d-pad: move
+-* A: open / validate
+-* B: cancel / back
+-* X: open context menu
+-* Y: select / unselect item
+-* R1/R2: page down
+-* L1/L2: page up
+-
+-Image viewer:
+-* d-pad: next / previous image, or scroll image
+-* A: switch original size / fit screen
+-
+-Text editor:
+-* d-pad: move
+-* A: open virtual keyboard / validate
+-* B: cancel / back
+-* X: open context menu
+-* Y + d-pad: select text
+-* R1/R2: page down
+-* L1/L2: page up
+-
+-# Compilation:
+-Define the following variables when executing 'make':
+-* CC
+-* SDL2_CONFIG
+-* DEVICE: CHI / RG351P / RG351V / RGB10 / RK2020 / PC
+-* START_PATH
+-* RES_PATH
++GroovyArcade / x86_64 Linux target: `make DEVICE=GROOVY` (see `../build_GroovyArcade.sh`).
++It shares the platform layer (`src/mister.cpp`, `DEVICE_GROOVY` blocks: SDL window on
++KMSDRM/X11, SDL keyboard + gamepads with configurable bindings) and links against a
++glibc 2.28 sysroot (`../make_sysroot_glibc228.sh`) with SDL2/SDL2_image/SDL2_ttf/FreeType,
++libstdc++ and libgcc static; `src/compat/glibc_compat.c` provides the few newer glibc
++symbols the toolchain's static libstdc++/libgcc reference. Code shared by both targets is
++under `MF_PLATFORM`.
+diff --git a/build_RG351.sh b/build_RG351.sh
+deleted file mode 100755
+index 1681efa..0000000
+--- a/build_RG351.sh
++++ /dev/null
+@@ -1,42 +0,0 @@
+-#!/bin/env bash
+-
+-TOOLCHAIN_DIR="$HOME"/Dev/351ELEC/build.351ELEC-RG351V.aarch64/toolchain
+-VERSION="$1"
+-
+-set -eE
+-
+-# $1: DEVICE
+-# $2: FIRMWARE
+-# $3: START_PATH
+-# $4: RES_PATH
+-build351Files() {
+-   DEVICE="$1"
+-   FIRMWARE="$2"
+-   START_PATH="$3"
+-   RES_PATH="$4"
+-   make clean
+-   make CC="$TOOLCHAIN_DIR"/bin/aarch64-libreelec-linux-gnueabi-g++ DEVICE="$DEVICE" SDL2_CONFIG="$TOOLCHAIN_DIR"/aarch64-libreelec-linux-gnueabi/sysroot/usr/bin/sdl2-config START_PATH="$START_PATH" RES_PATH="$RES_PATH"
+-   "$TOOLCHAIN_DIR"/aarch64-libreelec-linux-gnueabi/bin/strip 351Files
+-   mkdir -p build/351Files
+-   cp -r 351Files README.md res build/351Files
+-   cp launchers/"$FIRMWARE"/351Files.sh build
+-   cd build
+-   tar zcf 351Files-"$VERSION"_"$DEVICE"_"$FIRMWARE".tgz 351Files.sh 351Files
+-   rm -rf 351Files.sh 351Files
+-   cd ..
+-}
+-
+-# Clean up previous builds
+-rm -rf build
+-
+-# Build for 351V, 351ELEC
+-build351Files RG351V 351ELEC /storage/roms ./res
+-
+-# Build for 351P, 351ELEC
+-build351Files RG351P 351ELEC /storage/roms ./res
+-
+-# Build for 351V, ArkOS
+-build351Files RG351V ArkOS /roms ./res
+-
+-# Build for 351P, ArkOS
+-build351Files RG351P ArkOS /roms ./res
+diff --git a/launchers/351ELEC/351Files.sh b/launchers/351ELEC/351Files.sh
+deleted file mode 100755
+index d8db5d8..0000000
+--- a/launchers/351ELEC/351Files.sh
++++ /dev/null
+@@ -1,29 +0,0 @@
+-#!/bin/bash
+-
+-# SPDX-License-Identifier: GPL-2.0-or-later
+-# Copyright (C) 2020-present Shanti Gilbert (https://github.com/shantigilbert)
+-
+-# Source predefined functions and variables
+-. /etc/profile
+-
+-PORT="351Files"
+-# init_port binary audio(alsa. pulseaudio, default)
+-init_port ${PORT} alsa
+-
+-#~ /usr/bin/show_splash.sh "${PORT}"
+-
+-clear >/dev/console
+-
+-jslisten set "/usr/bin/killall ${PORT}"
+-
+-cd /storage/roms/ports/"${PORT}"
+-
+-./${PORT} &>>/tmp/logs/exec.log
+-
+-jslisten stop
+-
+-ret_error=$?
+-
+-end_port
+-
+-exit $ret_error
+diff --git a/launchers/ArkOS/351Files.sh b/launchers/ArkOS/351Files.sh
+deleted file mode 100755
+index a97dbcf..0000000
+--- a/launchers/ArkOS/351Files.sh
++++ /dev/null
+@@ -1,4 +0,0 @@
+-#!/bin/bash
+-
+-cd /roms/ports/351Files
+-./351Files 2>&1 1>351Files.log
+diff --git a/src/compat/glibc_compat.c b/src/compat/glibc_compat.c
+new file mode 100644
+index 0000000..d4a7380
+--- /dev/null
++++ b/src/compat/glibc_compat.c
+@@ -0,0 +1,99 @@
++/*
++ * MiSTerFiles (GroovyArcade build): glibc compatibility shims.
++ *
++ * The GroovyArcade binary is linked against a glibc 2.28 sysroot so it runs on old and new
++ * x86_64 distros alike, but the static libstdc++/libgcc that ship with the build compiler were
++ * compiled against a newer glibc and reference a few symbols that glibc 2.28 does not export.
++ * They are provided here, implemented only with interfaces glibc 2.28 already has.
++ * Only linked into the GroovyArcade target.
++ */
++#define _GNU_SOURCE
++#include <errno.h>
++#include <link.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <stdarg.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/random.h>
++#include <sys/stat.h>
++
++/* glibc 2.32: libstdc++ skips atomic refcounting when this is non-zero. 0 = always use atomics (safe). */
++char __libc_single_threaded = 0;
++
++/* glibc 2.36: used by std::random_device */
++uint32_t arc4random(void)
++{
++   uint32_t v;
++   ssize_t n;
++   do n = getrandom(&v, sizeof v, 0); while (n < 0 && errno == EINTR);
++   if (n != (ssize_t)sizeof v) { v = (uint32_t)rand() ^ ((uint32_t)rand() << 16); }
++   return v;
++}
++
++/* glibc 2.38: C23 versions of strto* (only differ in accepting "0b" binary prefixes) */
++long __isoc23_strtol(const char *s, char **e, int b) { return strtol(s, e, b); }
++unsigned long __isoc23_strtoul(const char *s, char **e, int b) { return strtoul(s, e, b); }
++long long __isoc23_strtoll(const char *s, char **e, int b) { return strtoll(s, e, b); }
++unsigned long long __isoc23_strtoull(const char *s, char **e, int b) { return strtoull(s, e, b); }
++int __isoc23_sscanf(const char *s, const char *f, ...)
++{
++   va_list ap; va_start(ap, f); int r = vsscanf(s, f, ap); va_end(ap); return r;
++}
++int __isoc23_vsscanf(const char *s, const char *f, va_list ap) { return vsscanf(s, f, ap); }
++
++/* glibc 2.33 exports stat/fstat/lstat directly (2.28 only has __xstat & co.) */
++int fstat(int fd, struct stat *st) { return __fxstat(_STAT_VER, fd, st); }
++int stat(const char *p, struct stat *st) { return __xstat(_STAT_VER, p, st); }
++int lstat(const char *p, struct stat *st) { return __lxstat(_STAT_VER, p, st); }
++
++/* glibc 2.35: _dl_find_object, used by the libgcc unwinder (C++ exceptions).
++   Same result built on dl_iterate_phdr (what libgcc used before 2.35). */
++struct dl_find_object
++{
++   unsigned long long dlfo_flags;
++   void *dlfo_map_start;
++   void *dlfo_map_end;
++   struct link_map *dlfo_link;
++   void *dlfo_eh_frame;
++   unsigned long long __dflo_reserved[7];
++};
++
++struct find_ctx { uintptr_t pc; struct dl_find_object *out; int found; };
++
++static int find_cb(struct dl_phdr_info *info, size_t size, void *data)
++{
++   (void)size;
++   struct find_ctx *c = (struct find_ctx *)data;
++   uintptr_t lo = UINTPTR_MAX, hi = 0;
++   void *eh = NULL;
++   int inside = 0;
++   for (int i = 0; i < info->dlpi_phnum; ++i)
++   {
++      const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
++      if (ph->p_type == PT_LOAD)
++      {
++         uintptr_t s = info->dlpi_addr + ph->p_vaddr, e = s + ph->p_memsz;
++         if (s < lo) lo = s;
++         if (e > hi) hi = e;
++         if (c->pc >= s && c->pc < e) inside = 1;
++      }
++      else if (ph->p_type == PT_GNU_EH_FRAME)
++         eh = (void *)(info->dlpi_addr + ph->p_vaddr);
++   }
++   if (!inside) return 0;
++   memset(c->out, 0, sizeof *c->out);
++   c->out->dlfo_map_start = (void *)lo;
++   c->out->dlfo_map_end = (void *)hi;
++   c->out->dlfo_eh_frame = eh;
++   c->found = 1;
++   return 1;
++}
++
++int _dl_find_object(void *pc, struct dl_find_object *result)
++{
++   struct find_ctx c = { (uintptr_t)pc, result, 0 };
++   dl_iterate_phdr(find_cb, &c);
++   return c.found ? 0 : -1;
++}
+diff --git a/src/def.h b/src/def.h
+index 839eae7..af362b9 100644
+--- a/src/def.h
++++ b/src/def.h
+@@ -8,10 +8,29 @@
+ //~ #define INHIBIT(X) X
+ #define INHIBIT(X) /* X */
+ 
+-#define APP_NAME "351Files"
++#define APP_NAME "MiSTerFiles"
++
++// Parameters for MiSTer FPGA (DE10-Nano) and GroovyArcade (x86_64, MF_PLATFORM). Screen size
++// comes from the framebuffer/window at runtime; a compact layout is used below 400 lines (CRT 240p).
++#if defined(MF_PLATFORM)
++   #include "mister.h"
++   // Size of the safe area (screen minus overscan margins); drawing is offset by the viewport
++   #define SCREEN_WIDTH             (MiSTer::screenW - 2 * MiSTer::marginX)
++   #define SCREEN_HEIGHT            (MiSTer::screenH - 2 * MiSTer::marginY)
++   #define HARDWARE_ACCELERATION    0
++   #define FULLSCREEN               1
++   #define FONT_NAME                "NotoSans-Regular.ttf"
++   #define FONT_NAME_MONO           "NotoSansMono-Regular.ttf"
++   #define FONT_SIZE                (MiSTer::lowRes ? 14 : 20)
++   #define LINE_HEIGHT              (MiSTer::lowRes ? 24 : 32)
++   #define ICON_SIZE                24
++   #define MARGIN_X                 (MiSTer::lowRes ? 8 : 10)
++   #define KEYBOARD_MARGIN          (MiSTer::lowRes ? 3 : 8)
++   #define KEYBOARD_KEY_SPACING     (MiSTer::lowRes ? 3 : 4)
++   #define KEYBOARD_SYMBOL_SIZE     24
+ 
+ // Parameters for RG351P
+-#if defined(DEVICE_RG351P)
++#elif defined(DEVICE_RG351P)
+    #define SCREEN_WIDTH             480
+    #define SCREEN_HEIGHT            320
+    #define HARDWARE_ACCELERATION    0
+@@ -150,7 +169,31 @@
+ #define VIEWER_SCROLL_SPEED      20
+ 
+ // Button events
+-#if defined(DEVICE_RG351P)
++#if defined(MF_PLATFORM)
++   // Everything arrives as keys (keyboard, Main_MiSTer virtual input from the mapped
++   // gamepad, or SDL gamepads translated in mister.cpp):
++   // arrows = move, Enter/A = open, Esc/Backspace/B = back, Space/Insert/X = select,
++   // Tab/Menu/x/F1/Y = context menu, PgUp/PgDn/L/R = page up/down
++   #define MISTER_KEY(K)                  (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.scancode == SDL_SCANCODE_##K)
++   #define BUTTON_PRESSED_UP              (MISTER_KEY(UP) || MISTER_KEY(KP_8))
++   #define BUTTON_PRESSED_DOWN            (MISTER_KEY(DOWN) || MISTER_KEY(KP_2))
++   #define BUTTON_PRESSED_LEFT            (MISTER_KEY(LEFT) || MISTER_KEY(KP_4))
++   #define BUTTON_PRESSED_RIGHT           (MISTER_KEY(RIGHT) || MISTER_KEY(KP_6))
++   #define BUTTON_PRESSED_PAGEUP          (MISTER_KEY(PAGEUP) || MISTER_KEY(HOME))
++   #define BUTTON_PRESSED_PAGEDOWN        (MISTER_KEY(PAGEDOWN) || MISTER_KEY(END))
++   #define BUTTON_PRESSED_VALIDATE        (MISTER_KEY(RETURN) || MISTER_KEY(KP_ENTER))
++   #define BUTTON_PRESSED_BACK            (MISTER_KEY(ESCAPE) || MISTER_KEY(BACKSPACE))
++   #define BUTTON_PRESSED_MENU_CONTEXT    (MISTER_KEY(TAB) || MISTER_KEY(X) || MISTER_KEY(MENU) || MISTER_KEY(APPLICATION) || MISTER_KEY(F1))
++   #define BUTTON_PRESSED_SELECT          (MISTER_KEY(SPACE) || MISTER_KEY(INSERT))
++   #define BUTTON_HELD_UP                 (MiSTer::held(SDL_SCANCODE_UP) || MiSTer::held(SDL_SCANCODE_KP_8))
++   #define BUTTON_HELD_DOWN               (MiSTer::held(SDL_SCANCODE_DOWN) || MiSTer::held(SDL_SCANCODE_KP_2))
++   #define BUTTON_HELD_LEFT               (MiSTer::held(SDL_SCANCODE_LEFT) || MiSTer::held(SDL_SCANCODE_KP_4))
++   #define BUTTON_HELD_RIGHT              (MiSTer::held(SDL_SCANCODE_RIGHT) || MiSTer::held(SDL_SCANCODE_KP_6))
++   #define BUTTON_HELD_PAGEUP             (MiSTer::held(SDL_SCANCODE_PAGEUP) || MiSTer::held(SDL_SCANCODE_HOME))
++   #define BUTTON_HELD_PAGEDOWN           (MiSTer::held(SDL_SCANCODE_PAGEDOWN) || MiSTer::held(SDL_SCANCODE_END))
++   #define BUTTON_HELD_SELECT             (MiSTer::held(SDL_SCANCODE_SPACE) || MiSTer::held(SDL_SCANCODE_INSERT))
++   #define BUTTON_HELD_VALIDATE           (MiSTer::held(SDL_SCANCODE_RETURN) || MiSTer::held(SDL_SCANCODE_KP_ENTER))
++#elif defined(DEVICE_RG351P)
+    #define BUTTON_PRESSED_UP              event.type == SDL_JOYHATMOTION && event.jhat.value == SDL_HAT_UP
+    #define BUTTON_PRESSED_DOWN            event.type == SDL_JOYHATMOTION && event.jhat.value == SDL_HAT_DOWN
+    #define BUTTON_PRESSED_LEFT            event.type == SDL_JOYHATMOTION && event.jhat.value == SDL_HAT_LEFT
+diff --git a/src/dialog.cpp b/src/dialog.cpp
+index ec63e9c..ba26855 100644
+--- a/src/dialog.cpp
++++ b/src/dialog.cpp
+@@ -66,8 +66,18 @@ void Dialog::render(const bool p_focus)
+    if (l_dialogDim.w > SCREEN_WIDTH)
+       l_dialogDim.w = SCREEN_WIDTH;
+ 
++   // Number of option lines that fit on screen; scroll if needed
++   int l_nbShown = m_options.size();
++   int l_maxShown = (SCREEN_HEIGHT - LINE_HEIGHT - DIALOG_BORDER) / LINE_HEIGHT - (int)m_labels.size();
++   if (l_maxShown < 1) l_maxShown = 1;
++   if (l_nbShown > l_maxShown) l_nbShown = l_maxShown;
++   if (m_cursor < m_camera.y) m_camera.y = m_cursor;
++   if (m_cursor >= m_camera.y + l_nbShown) m_camera.y = m_cursor - l_nbShown + 1;
++   if (m_camera.y > (int)m_options.size() - l_nbShown) m_camera.y = m_options.size() - l_nbShown;
++   if (m_camera.y < 0) m_camera.y = 0;
++
+    // Render dialog background
+-   l_dialogDim.h = LINE_HEIGHT + (m_labels.size() + m_options.size()) * LINE_HEIGHT + DIALOG_BORDER;
++   l_dialogDim.h = LINE_HEIGHT + (m_labels.size() + l_nbShown) * LINE_HEIGHT + DIALOG_BORDER;
+    l_dialogDim.x = (SCREEN_WIDTH - l_dialogDim.w) / 2;
+    l_dialogDim.y = (SCREEN_HEIGHT - l_dialogDim.h) / 2;
+    SDL_SetRenderDrawColor(g_renderer, COLOR_TITLE_BG, 255);
+@@ -107,15 +117,18 @@ void Dialog::render(const bool p_focus)
+       else
+          SDL_SetRenderDrawColor(g_renderer, COLOR_CURSOR_NO_FOCUS, 255);
+       l_rect.x = l_dialogDim.x + DIALOG_BORDER;
+-      l_rect.y = l_dialogDim.y + LINE_HEIGHT + (m_cursor + m_labels.size()) * LINE_HEIGHT;
++      l_rect.y = l_dialogDim.y + LINE_HEIGHT + (m_cursor - m_camera.y + m_labels.size()) * LINE_HEIGHT;
+       l_rect.w = l_dialogDim.w - 2 * DIALOG_BORDER;
+       l_rect.h = LINE_HEIGHT;
+       SDL_RenderFillRect(g_renderer, &l_rect);
+    }
+ 
+    // Display options
+-   for (l_tex = l_texOptions.begin(), l_icon = m_optionIcons.begin(); l_tex != l_texOptions.end(); ++l_tex, ++l_icon)
++   int l_index = 0;
++   for (l_tex = l_texOptions.begin(), l_icon = m_optionIcons.begin(); l_tex != l_texOptions.end(); ++l_tex, ++l_icon, ++l_index)
+    {
++      if (l_index < m_camera.y || l_index >= m_camera.y + l_nbShown)
++         continue;
+       // Icon
+       if (*l_icon != NULL)
+          SDLUtils::renderTexture(*l_icon, l_dialogDim.x + DIALOG_BORDER + MARGIN_X, l_y, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
+@@ -124,6 +137,21 @@ void Dialog::render(const bool p_focus)
+       l_y += LINE_HEIGHT;
+    }
+ 
++   // Scroll indicator
++   if (l_nbShown < (int)m_options.size())
++   {
++      int l_areaY = l_dialogDim.y + LINE_HEIGHT + m_labels.size() * LINE_HEIGHT;
++      int l_areaH = l_nbShown * LINE_HEIGHT;
++      SDL_Rect l_bar;
++      l_bar.w = DIALOG_BORDER;
++      l_bar.x = l_dialogDim.x + l_dialogDim.w - DIALOG_BORDER;
++      l_bar.h = l_areaH * l_nbShown / m_options.size();
++      if (l_bar.h < 4) l_bar.h = 4;
++      l_bar.y = l_areaY + (l_areaH - l_bar.h) * m_camera.y / (m_options.size() - l_nbShown);
++      SDL_SetRenderDrawColor(g_renderer, COLOR_TEXT_NORMAL, 255);
++      SDL_RenderFillRect(g_renderer, &l_bar);
++   }
++
+    // Clean up
+    if (l_textureTitle != NULL)
+       SDL_DestroyTexture(l_textureTitle);
+diff --git a/src/main.cpp b/src/main.cpp
+index cd1f3dd..06710cd 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1,6 +1,9 @@
+ #include <string>
+ #include <vector>
+ #include <sstream>
++#include <unistd.h>
++#include <limits.h>
++#include <sys/stat.h>
+ #include <SDL.h>
+ #include <SDL_ttf.h>
+ #include "def.h"
+@@ -43,6 +46,29 @@ SDL_Texture *g_iconPlus = NULL;
+ 
+ int main(int argc, char* args[])
+ {
++   #if defined(MF_PLATFORM)
++   // Resources are found relative to the executable (./res), whatever the cwd
++   {
++      char exe[PATH_MAX];
++      ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
++      if (len > 0)
++      {
++         exe[len] = '\0';
++         std::string dir(exe);
++         dir = dir.substr(0, dir.find_last_of('/'));
++         if (!dir.empty() && chdir(dir.c_str()) != 0) {}
++      }
++   }
++   #endif
++   // Optional start directory as first argument
++   std::string startPath(START_PATH);
++   if (argc > 1)
++   {
++      struct stat st;
++      if (stat(args[1], &st) == 0 && S_ISDIR(st.st_mode))
++         startPath = args[1];
++   }
++
+    // Init SDL
+    if (! SDLUtils::init())
+    {
+@@ -86,7 +112,7 @@ int main(int argc, char* args[])
+ 
+    // Execute main window
+    {
+-      MainWindow mainWindow(START_PATH);
++      MainWindow mainWindow(startPath);
+       mainWindow.execute();
+    }
+ 
+diff --git a/src/mainWindow.cpp b/src/mainWindow.cpp
+index 2ba4aeb..ab8db6f 100644
+--- a/src/mainWindow.cpp
++++ b/src/mainWindow.cpp
+@@ -10,6 +10,9 @@
+ #include "textViewer.h"
+ #include "textEditor.h"
+ #include "imageViewer.h"
++#if defined(MF_PLATFORM)
++#include "overscan.h"
++#endif
+ 
+ // Destructor
+ MainWindow::~MainWindow(void)
+@@ -388,6 +391,9 @@ void MainWindow::openContextMenu(void)
+       l_dialog.addOption("Select all", 5, g_iconSelect);
+       l_dialog.addOption("Select none", 6, g_iconNone);
+       l_dialog.addOption("New directory", 7, g_iconNewDir);
++      #if defined(MF_PLATFORM)
++      l_dialog.addOption("Tela / Overscan", 10, g_iconImage);
++      #endif
+       l_dialog.addOption("Quit", 8, g_iconQuit);
+       result = l_dialog.execute();
+    }
+@@ -444,6 +450,31 @@ void MainWindow::openContextMenu(void)
+       case 8:
+          m_retVal = 0;
+          break;
++      #if defined(MF_PLATFORM)
++      // Screen / overscan adjust
++      case 10:
++      {
++         int value = OverscanScreen::run();
++         if (value >= 0 && value != MiSTer::overscan)
++         {
++            MiSTer::setOverscan(value);
++            if (! MiSTer::saveSetting("OVERSCAN", value))
++            {
++               Dialog l_err("Erro");
++               l_err.addLabel("Nao foi possivel salvar o MiSTerFiles.ini");
++               l_err.addOption("OK", 0);
++               l_err.execute();
++            }
++            // Lay out the list again for the new safe area
++            m_nbVisibleLines = (SCREEN_HEIGHT - LINE_HEIGHT) / LINE_HEIGHT;
++            m_scrollbar.x = SCREEN_WIDTH - MARGIN_X;
++            adjustScrollbar();
++            adjustCamera();
++         }
++         g_hasChanged = true;
++      }
++      break;
++      #endif
+       // New directory
+       case 7:
+       {
+diff --git a/src/mister.cpp b/src/mister.cpp
+new file mode 100644
+index 0000000..4a693d2
+--- /dev/null
++++ b/src/mister.cpp
+@@ -0,0 +1,909 @@
++// MiSTerFiles: MiSTer FPGA platform layer, also used by the GroovyArcade target (see mister.h)
++#if defined(DEVICE_MISTER) || defined(DEVICE_GROOVY)
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <cerrno>
++#include <csignal>
++#include <map>
++#include <cmath>
++#include <fstream>
++#include <sstream>
++#include <sys/stat.h>
++#include <vector>
++#include <string>
++#include <iostream>
++#include <fcntl.h>
++#include <unistd.h>
++#include <dirent.h>
++#include <termios.h>
++#include <sys/ioctl.h>
++#include <sys/mman.h>
++#include <linux/fb.h>
++#include <linux/kd.h>
++#include <linux/input.h>
++#include "mister.h"
++
++namespace MiSTer
++{
++int screenW = 640;
++int screenH = 480;
++bool lowRes = false;
++int overscan = 0;
++int marginX = 0;
++int marginY = 0;
++double displayAspect = 4.0 / 3.0;
++}
++
++namespace
++{
++// ---------------------------------------------------------------- video ----
++int            fbFd = -1;
++uint8_t       *fbMem = NULL;
++size_t         fbMemSize = 0;
++size_t         fbOffset = 0;
++int            fbPitch = 0;
++SDL_Surface   *backSurface = NULL;
++SDL_Renderer  *renderer = NULL;
++const char    *screenshotPath = NULL;   // MF_SCREENSHOT: dump last frame (PPM) on exit
++
++// -------------------------------------------------------------- console ----
++int            ttyFd = -1;
++int            ttyOldMode = KD_TEXT;
++bool           ttyModeSet = false;
++struct termios ttyOldTermios;
++bool           ttyTermiosSet = false;
++
++// ---------------------------------------------------------------- input ----
++// Per-source set of held SDL scancodes, global hold counters
++struct Source { std::vector<bool> down; Source() : down(SDL_NUM_SCANCODES, false) {} };
++std::map<long, Source> sources;              // key: evdev fd, or 1e6 + SDL joystick instance id
++int  holdCount[SDL_NUM_SCANCODES] = {0};
++
++struct EvDev { std::string path; int fd; };
++std::vector<EvDev> evdevs;
++Uint32 lastScan = 0;
++
++bool useJoystick = false;
++struct Pad { SDL_Joystick *joy; SDL_GameController *gc; SDL_JoystickID id; bool quitHeld; };
++std::vector<Pad> pads;
++
++const Uint32 SYNTH_WINDOW_ID = 0x4D460000;   // "MF"
++
++void pushKey(SDL_Scancode sc, bool down)
++{
++   SDL_Event e;
++   SDL_zero(e);
++   e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
++   e.key.timestamp = SDL_GetTicks();
++   e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
++   e.key.repeat = 0;
++   e.key.keysym.scancode = sc;
++   e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
++   e.key.windowID = SYNTH_WINDOW_ID;   // ours: let it through the GroovyArcade event filter
++   SDL_PushEvent(&e);
++}
++
++void setKey(long src, SDL_Scancode sc, bool down)
++{
++   if (sc == SDL_SCANCODE_UNKNOWN) return;
++   Source &s = sources[src];
++   if (s.down[sc] == down) return;
++   s.down[sc] = down;
++   if (down) { if (holdCount[sc]++ == 0) pushKey(sc, true); }
++   else if (holdCount[sc] > 0) { if (--holdCount[sc] == 0) pushKey(sc, false); }
++}
++
++void releaseSource(long src)
++{
++   std::map<long, Source>::iterator it = sources.find(src);
++   if (it == sources.end()) return;
++   for (int sc = 0; sc < SDL_NUM_SCANCODES; ++sc)
++      if (it->second.down[sc]) setKey(src, (SDL_Scancode)sc, false);
++   sources.erase(src);
++}
++
++#if defined(DEVICE_GROOVY)
++// ------------------------------------------------------ GroovyArcade ----
++SDL_Window    *window = NULL;
++int            winW = 0, winH = 0;
++
++// Settings from MiSTerFiles.ini (MF_INI); environment variables MF_<KEY> override them
++std::map<std::string, std::string> ini;
++
++std::string trim(const std::string &s)
++{
++   size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
++   return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
++}
++
++void loadIni(void)
++{
++   const char *path = getenv("MF_INI") ? getenv("MF_INI") : "./MiSTerFiles.ini";
++   std::ifstream in(path, std::ios::binary);
++   if (!in.good()) in.open(getenv("MF_INI_EXAMPLE") ? getenv("MF_INI_EXAMPLE") : "./MiSTerFiles.ini.example", std::ios::binary);
++   std::string line;
++   while (in.good() && std::getline(in, line))
++   {
++      line = trim(line);
++      if (line.empty() || line[0] == '#' || line[0] == ';') continue;
++      size_t eq = line.find('=');
++      if (eq == std::string::npos) continue;
++      std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
++      // bash-style quoting ("..." or '...'), drop a trailing # comment outside quotes
++      if (!v.empty() && (v[0] == '"' || v[0] == '\''))
++      {
++         size_t e = v.find(v[0], 1);
++         v = v.substr(1, e == std::string::npos ? std::string::npos : e - 1);
++      }
++      else
++      {
++         size_t h = v.find(" #");
++         if (h != std::string::npos) v = trim(v.substr(0, h));
++      }
++      ini[k] = v;
++   }
++}
++
++std::string setting(const char *key, const char *def)
++{
++   std::string env = std::string("MF_") + key;
++   if (getenv(env.c_str())) return getenv(env.c_str());
++   std::map<std::string, std::string>::const_iterator it = ini.find(key);
++   return it != ini.end() ? it->second : std::string(def);
++}
++
++std::vector<std::string> splitList(const std::string &s)
++{
++   std::vector<std::string> out;
++   std::string cur;
++   std::istringstream ss(s);
++   while (std::getline(ss, cur, ',')) { cur = trim(cur); if (!cur.empty()) out.push_back(cur); }
++   return out;
++}
++
++// Logical actions -> the keys the UI understands (see def.h)
++struct Action { const char *name; SDL_Scancode logical; const char *keys; const char *joy; };
++const Action actions[] =
++{
++   { "UP",    SDL_SCANCODE_UP,       "Up,Keypad 8",                     "" },
++   { "DOWN",  SDL_SCANCODE_DOWN,     "Down,Keypad 2",                   "" },
++   { "LEFT",  SDL_SCANCODE_LEFT,     "Left,Keypad 4",                   "" },
++   { "RIGHT", SDL_SCANCODE_RIGHT,    "Right,Keypad 6",                  "" },
++   { "A",     SDL_SCANCODE_RETURN,   "Return,Keypad Enter,Left Ctrl",   "0" },
++   { "B",     SDL_SCANCODE_ESCAPE,   "Escape,Backspace,Left Alt",       "1" },
++   { "X",     SDL_SCANCODE_SPACE,    "Space,Insert",                    "2,6" },
++   { "Y",     SDL_SCANCODE_TAB,      "Tab,Left Shift,F1,Menu",          "3,7" },
++   { "L",     SDL_SCANCODE_PAGEUP,   "PageUp,Home",                     "4" },
++   { "R",     SDL_SCANCODE_PAGEDOWN, "PageDown,End",                    "5" },
++   { "QUIT",  SDL_SCANCODE_UNKNOWN,  "",                                "" },
++};
++const int NB_ACTIONS = sizeof(actions) / sizeof(actions[0]);
++const int ACTION_QUIT = NB_ACTIONS - 1;
++
++std::map<int, int> keyToAction;      // physical SDL scancode -> action index
++std::vector<int>   joyButtons[NB_ACTIONS];   // raw joystick button numbers per action
++
++void loadBindings(void)
++{
++   for (int a = 0; a < NB_ACTIONS; ++a)
++   {
++      std::string kname = std::string("KEY_") + actions[a].name;
++      std::vector<std::string> keys = splitList(setting(kname.c_str(), actions[a].keys));
++      std::ostringstream log;
++      for (size_t i = 0; i < keys.size(); ++i)
++      {
++         SDL_Scancode sc = SDL_GetScancodeFromName(keys[i].c_str());
++         if (sc == SDL_SCANCODE_UNKNOWN)
++         {
++            // also accept a number (SDL scancode)
++            char *end = NULL;
++            long n = strtol(keys[i].c_str(), &end, 10);
++            if (end != NULL && *end == '\0' && n > 0 && n < SDL_NUM_SCANCODES && keys[i].size() > 1) sc = (SDL_Scancode)n;
++         }
++         if (sc == SDL_SCANCODE_UNKNOWN) { std::cerr << "Groovy: " << kname << ": unknown key '" << keys[i] << "'" << std::endl; continue; }
++         keyToAction[sc] = a;
++         log << " [" << SDL_GetScancodeName(sc) << "]";
++      }
++      std::string jname = std::string("JOY_") + actions[a].name;
++      std::vector<std::string> btn = splitList(setting(jname.c_str(), actions[a].joy));
++      for (size_t i = 0; i < btn.size(); ++i) joyButtons[a].push_back(atoi(btn[i].c_str()));
++      std::cout << "Groovy: " << actions[a].name << " =" << log.str() << " / joystick buttons " << setting(jname.c_str(), actions[a].joy) << std::endl;
++   }
++}
++
++std::vector<int> padsAdded;
++bool debugInput = false;    // MF_DEBUG_INPUT=1: log every physical key
++std::vector<SDL_JoystickID> padsRemoved;
++
++// Physical key from SDL (or the test input file) -> logical key
++void physicalKey(SDL_Scancode sc, bool down)
++{
++   std::map<int, int>::const_iterator it = keyToAction.find(sc);
++   if (it == keyToAction.end()) return;
++   if (it->second == ACTION_QUIT)
++   {
++      if (down) { SDL_Event q; SDL_zero(q); q.type = SDL_QUIT; SDL_PushEvent(&q); }
++      return;
++   }
++   // one source per physical key: two keys bound to the same action do not cancel out
++   setKey(2000000L + sc, actions[it->second].logical, down);
++}
++
++// Real keyboard and joystick events never reach the UI: they are translated here
++int SDLCALL eventFilter(void *, SDL_Event *e)
++{
++   switch (e->type)
++   {
++      case SDL_KEYDOWN:
++      case SDL_KEYUP:
++         if (e->key.windowID == SYNTH_WINDOW_ID)
++         {
++            if (debugInput) std::cout << "Groovy:  -> " << SDL_GetScancodeName(e->key.keysym.scancode) << (e->type == SDL_KEYDOWN ? " down" : " up") << std::endl;
++            return 1;
++         }
++         if (debugInput) std::cout << "Groovy: key " << SDL_GetScancodeName(e->key.keysym.scancode) << (e->type == SDL_KEYDOWN ? " down" : " up") << (e->key.repeat ? " (repeat)" : "") << std::endl;
++         if (e->key.repeat == 0) physicalKey(e->key.keysym.scancode, e->type == SDL_KEYDOWN);
++         return 0;
++      case SDL_TEXTINPUT:
++      case SDL_TEXTEDITING:
++         return 0;
++      case SDL_JOYDEVICEADDED: padsAdded.push_back(e->jdevice.which); return 0;
++      case SDL_JOYDEVICEREMOVED: padsRemoved.push_back(e->jdevice.which); return 0;
++      default:
++         if (e->type >= SDL_JOYAXISMOTION && e->type <= SDL_CONTROLLERSENSORUPDATE) return 0;
++         return 1;
++   }
++}
++#endif
++
++SDL_Scancode linuxToSdl(int code)
++{
++   switch (code)
++   {
++      case KEY_UP: return SDL_SCANCODE_UP;
++      case KEY_DOWN: return SDL_SCANCODE_DOWN;
++      case KEY_LEFT: return SDL_SCANCODE_LEFT;
++      case KEY_RIGHT: return SDL_SCANCODE_RIGHT;
++      case KEY_ENTER: return SDL_SCANCODE_RETURN;
++      case KEY_KPENTER: return SDL_SCANCODE_KP_ENTER;
++      case KEY_ESC: return SDL_SCANCODE_ESCAPE;
++      case KEY_BACKSPACE: return SDL_SCANCODE_BACKSPACE;
++      case KEY_TAB: return SDL_SCANCODE_TAB;
++      case KEY_SPACE: return SDL_SCANCODE_SPACE;
++      case KEY_INSERT: return SDL_SCANCODE_INSERT;
++      case KEY_DELETE: return SDL_SCANCODE_DELETE;
++      case KEY_HOME: return SDL_SCANCODE_HOME;
++      case KEY_END: return SDL_SCANCODE_END;
++      case KEY_PAGEUP: return SDL_SCANCODE_PAGEUP;
++      case KEY_PAGEDOWN: return SDL_SCANCODE_PAGEDOWN;
++      case KEY_COMPOSE: return SDL_SCANCODE_APPLICATION;
++      case KEY_MENU: return SDL_SCANCODE_MENU;
++      case KEY_X: return SDL_SCANCODE_X;
++      case KEY_Q: return SDL_SCANCODE_Q;
++      case KEY_LEFTCTRL: return SDL_SCANCODE_LCTRL;
++      case KEY_RIGHTCTRL: return SDL_SCANCODE_RCTRL;
++      case KEY_LEFTSHIFT: return SDL_SCANCODE_LSHIFT;
++      case KEY_RIGHTSHIFT: return SDL_SCANCODE_RSHIFT;
++      case KEY_C: return SDL_SCANCODE_C;
++      case KEY_F1: return SDL_SCANCODE_F1;
++      case KEY_F10: return SDL_SCANCODE_F10;
++      case KEY_KP8: return SDL_SCANCODE_KP_8;
++      case KEY_KP2: return SDL_SCANCODE_KP_2;
++      case KEY_KP4: return SDL_SCANCODE_KP_4;
++      case KEY_KP6: return SDL_SCANCODE_KP_6;
++      default: return SDL_SCANCODE_UNKNOWN;
++   }
++}
++
++#define BITS_PER_LONG (sizeof(long) * 8)
++#define TEST_BIT(bit, arr) ((arr[(bit) / BITS_PER_LONG] >> ((bit) % BITS_PER_LONG)) & 1)
++
++bool isKeyboard(int fd)
++{
++   unsigned long keys[(KEY_MAX + BITS_PER_LONG) / BITS_PER_LONG];
++   memset(keys, 0, sizeof(keys));
++   if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) < 0) return false;
++   // Anything able to send Enter or arrows counts (real keyboards, MiSTer virtual input)
++   return TEST_BIT(KEY_ENTER, keys) || TEST_BIT(KEY_UP, keys) || TEST_BIT(KEY_ESC, keys);
++}
++
++void scanEvdev(void)
++{
++   DIR *dir = opendir("/dev/input");
++   if (dir == NULL) return;
++   struct dirent *ent;
++   while ((ent = readdir(dir)) != NULL)
++   {
++      if (strncmp(ent->d_name, "event", 5) != 0) continue;
++      std::string path = std::string("/dev/input/") + ent->d_name;
++      bool known = false;
++      for (size_t i = 0; i < evdevs.size(); ++i) if (evdevs[i].path == path) { known = true; break; }
++      if (known) continue;
++      int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++      if (fd < 0) continue;
++      if (!isKeyboard(fd)) { ::close(fd); continue; }
++      char name[128] = "?";
++      ioctl(fd, EVIOCGNAME(sizeof(name)), name);
++      std::cout << "MiSTer: keyboard input " << path << " (" << name << ")" << std::endl;
++      EvDev d; d.path = path; d.fd = fd;
++      evdevs.push_back(d);
++   }
++   closedir(dir);
++}
++
++void readEvdev(void)
++{
++   for (size_t i = 0; i < evdevs.size(); )
++   {
++      struct input_event ev[32];
++      bool dead = false;
++      for (;;)
++      {
++         ssize_t n = read(evdevs[i].fd, ev, sizeof(ev));
++         if (n < 0) { if (errno != EAGAIN && errno != EINTR) dead = true; break; }
++         if (n == 0) break;
++         for (size_t k = 0; k < n / sizeof(struct input_event); ++k)
++         {
++            if (ev[k].type != EV_KEY || ev[k].value == 2) continue;   // ignore autorepeat
++            #if defined(DEVICE_GROOVY)
++            physicalKey(linuxToSdl(ev[k].code), ev[k].value != 0);   // test hook only (MF_INPUT_FILE)
++            #else
++            setKey(evdevs[i].fd, linuxToSdl(ev[k].code), ev[k].value != 0);
++            #endif
++         }
++      }
++      if (dead)
++      {
++         releaseSource(evdevs[i].fd);
++         ::close(evdevs[i].fd);
++         evdevs.erase(evdevs.begin() + i);
++      }
++      else ++i;
++   }
++}
++
++// --------------------------------------------------------- SDL joystick ----
++void openPad(int index)
++{
++   Pad p; p.joy = NULL; p.gc = NULL; p.quitHeld = false;
++   if (SDL_IsGameController(index))
++   {
++      p.gc = SDL_GameControllerOpen(index);
++      if (p.gc) p.joy = SDL_GameControllerGetJoystick(p.gc);
++   }
++   if (p.joy == NULL) p.joy = SDL_JoystickOpen(index);
++   if (p.joy == NULL) return;
++   p.id = SDL_JoystickInstanceID(p.joy);
++   for (size_t i = 0; i < pads.size(); ++i)
++      if (pads[i].id == p.id)
++      {
++         // already open (startup scan + its DEVICEADDED event): drop the extra reference
++         if (p.gc) SDL_GameControllerClose(p.gc); else SDL_JoystickClose(p.joy);
++         return;
++      }
++   std::cout << "MiSTer: gamepad " << SDL_JoystickName(p.joy) << (p.gc ? " (GameController)" : " (raw joystick)") << std::endl;
++   pads.push_back(p);
++}
++
++void closePad(SDL_JoystickID id)
++{
++   for (size_t i = 0; i < pads.size(); ++i)
++      if (pads[i].id == id)
++      {
++         releaseSource(1000000L + id);
++         if (pads[i].gc) SDL_GameControllerClose(pads[i].gc); else SDL_JoystickClose(pads[i].joy);
++         pads.erase(pads.begin() + i);
++         return;
++      }
++}
++
++void pollPads(void)
++{
++   const int T = 16000;
++   for (size_t i = 0; i < pads.size(); ++i)
++   {
++      Pad &p = pads[i];
++      bool up = false, down = false, left = false, right = false, a = false, b = false, sel = false, menu = false, pgu = false, pgd = false;
++      if (p.gc)
++      {
++         SDL_GameController *g = p.gc;
++         up    = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_DPAD_UP)    || SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_LEFTY) < -T;
++         down  = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_DPAD_DOWN)  || SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_LEFTY) >  T;
++         left  = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_DPAD_LEFT)  || SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_LEFTX) < -T;
++         right = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_LEFTX) >  T;
++         a     = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_A);
++         b     = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_B);
++         sel   = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_X) || SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_BACK);
++         menu  = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_Y) || SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_START);
++         pgu   = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)  || SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_TRIGGERLEFT)  > T;
++         pgd   = SDL_GameControllerGetButton(g, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) || SDL_GameControllerGetAxis(g, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > T;
++      }
++      else
++      {
++         SDL_Joystick *j = p.joy;
++         if (SDL_JoystickNumHats(j) > 0)
++         {
++            Uint8 h = SDL_JoystickGetHat(j, 0);
++            up = h & SDL_HAT_UP; down = h & SDL_HAT_DOWN; left = h & SDL_HAT_LEFT; right = h & SDL_HAT_RIGHT;
++         }
++         if (SDL_JoystickNumAxes(j) >= 2)
++         {
++            Sint16 x = SDL_JoystickGetAxis(j, 0), y = SDL_JoystickGetAxis(j, 1);
++            up |= y < -T; down |= y > T; left |= x < -T; right |= x > T;
++         }
++         int nb = SDL_JoystickNumButtons(j);
++         #if defined(DEVICE_GROOVY)
++         // raw joysticks (arcade encoders in joystick mode): buttons from JOY_A=... in the ini
++         bool *dst[6] = { &a, &b, &sel, &menu, &pgu, &pgd };
++         for (int k = 0; k < 6; ++k)
++            for (size_t n = 0; n < joyButtons[4 + k].size(); ++n)
++               if (joyButtons[4 + k][n] < nb && SDL_JoystickGetButton(j, joyButtons[4 + k][n])) *dst[k] = true;
++         bool quit = false;
++         for (size_t n = 0; n < joyButtons[ACTION_QUIT].size(); ++n)
++            if (joyButtons[ACTION_QUIT][n] < nb && SDL_JoystickGetButton(j, joyButtons[ACTION_QUIT][n])) quit = true;
++         if (quit && !p.quitHeld) { SDL_Event q; SDL_zero(q); q.type = SDL_QUIT; SDL_PushEvent(&q); }
++         p.quitHeld = quit;
++         #else
++         a    = nb > 0 && SDL_JoystickGetButton(j, 0);
++         b    = nb > 1 && SDL_JoystickGetButton(j, 1);
++         sel  = (nb > 2 && SDL_JoystickGetButton(j, 2)) || (nb > 6 && SDL_JoystickGetButton(j, 6));
++         menu = (nb > 3 && SDL_JoystickGetButton(j, 3)) || (nb > 7 && SDL_JoystickGetButton(j, 7));
++         pgu  = nb > 4 && SDL_JoystickGetButton(j, 4);
++         pgd  = nb > 5 && SDL_JoystickGetButton(j, 5);
++         #endif
++      }
++      long src = 1000000L + p.id;
++      setKey(src, SDL_SCANCODE_UP, up);
++      setKey(src, SDL_SCANCODE_DOWN, down);
++      setKey(src, SDL_SCANCODE_LEFT, left);
++      setKey(src, SDL_SCANCODE_RIGHT, right);
++      setKey(src, SDL_SCANCODE_RETURN, a);
++      setKey(src, SDL_SCANCODE_ESCAPE, b);
++      setKey(src, SDL_SCANCODE_SPACE, sel);
++      setKey(src, SDL_SCANCODE_TAB, menu);
++      setKey(src, SDL_SCANCODE_PAGEUP, pgu);
++      setKey(src, SDL_SCANCODE_PAGEDOWN, pgd);
++   }
++}
++
++
++// -------------------------------------------------------------- console ----
++void consoleRestore(void)
++{
++   if (ttyFd < 0) return;
++   if (ttyModeSet) ioctl(ttyFd, KDSETMODE, ttyOldMode);
++   tcflush(ttyFd, TCIFLUSH);   // drop keys typed while we were running
++   if (ttyTermiosSet) tcsetattr(ttyFd, TCSANOW, &ttyOldTermios);
++   ttyModeSet = ttyTermiosSet = false;
++}
++
++#if !defined(DEVICE_GROOVY)
++void consoleSetup(void)
++{
++   const char *names[] = { "/dev/tty", "/dev/tty0" };
++   for (int i = 0; i < 2 && ttyFd < 0; ++i)
++   {
++      int fd = open(names[i], O_RDWR | O_CLOEXEC);
++      if (fd < 0) continue;
++      int mode;
++      if (ioctl(fd, KDGETMODE, &mode) == 0) { ttyFd = fd; ttyOldMode = mode; }
++      else ::close(fd);
++   }
++   if (ttyFd < 0) { std::cout << "MiSTer: no console tty, text console stays as is" << std::endl; return; }
++   if (ioctl(ttyFd, KDSETMODE, KD_GRAPHICS) == 0) ttyModeSet = true;
++   if (tcgetattr(ttyFd, &ttyOldTermios) == 0)
++   {
++      struct termios t = ttyOldTermios;
++      t.c_lflag &= ~(ICANON | ECHO);
++      if (tcsetattr(ttyFd, TCSANOW, &t) == 0) ttyTermiosSet = true;
++   }
++}
++#endif
++
++void signalHandler(int sig)
++{
++   consoleRestore();
++   signal(sig, SIG_DFL);
++   raise(sig);
++}
++
++void saveScreenshot(void)
++{
++   if (screenshotPath == NULL || backSurface == NULL) return;
++   SDL_Surface *rgb = SDL_ConvertSurfaceFormat(backSurface, SDL_PIXELFORMAT_RGB24, 0);
++   if (rgb == NULL) return;
++   FILE *f = fopen(screenshotPath, "wb");
++   if (f)
++   {
++      fprintf(f, "P6\n%d %d\n255\n", rgb->w, rgb->h);
++      for (int y = 0; y < rgb->h; ++y) fwrite((uint8_t *)rgb->pixels + y * rgb->pitch, 3, rgb->w, f);
++      fclose(f);
++   }
++   SDL_FreeSurface(rgb);
++}
++} // namespace
++
++//------------------------------------------------------------------------------
++
++#if defined(DEVICE_GROOVY)
++SDL_Renderer *MiSTer::init(void)
++{
++   screenshotPath = getenv("MF_SCREENSHOT");
++   loadIni();
++
++   // Physical aspect of the TV, for the overscan side margins (ASPECT=4:3, 16:9, 1.333...)
++   {
++      std::string a = setting("ASPECT", "4:3");
++      double n = 0, d = 0;
++      if (sscanf(a.c_str(), "%lf:%lf", &n, &d) == 2 && n > 0 && d > 0) displayAspect = n / d;
++      else if (atof(a.c_str()) > 0.5) displayAspect = atof(a.c_str());
++   }
++
++   // Window: fullscreen on the current mode (what switchres/the frontend set up), or a given mode
++   SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
++   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
++   SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++   std::cout << "Groovy: SDL video driver " << (SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?") << std::endl;
++   // X11: copy frames with plain X (XShm), no OpenGL needed. KMSDRM needs SDL's GLES path.
++   const char *drv = SDL_GetCurrentVideoDriver();
++   if (drv != NULL && strcmp(drv, "x11") == 0 && atoi(setting("X11_OPENGL", "0").c_str()) == 0)
++      SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
++   SDL_DisplayMode desk;
++   if (SDL_GetDesktopDisplayMode(0, &desk) == 0)
++      std::cout << "Groovy: desktop mode " << desk.w << "x" << desk.h << " @" << desk.refresh_rate << "Hz" << std::endl;
++   else { desk.w = 640; desk.h = 480; desk.refresh_rate = 0; }
++
++   int reqW = 0, reqH = 0;
++   std::string mode = setting("VIDEO_MODE", "desktop");    // desktop | WxH
++   sscanf(mode.c_str(), "%dx%d", &reqW, &reqH);
++   const bool windowed = atoi(setting("WINDOWED", "0").c_str()) != 0;
++   Uint32 flags = SDL_WINDOW_SHOWN;
++   if (windowed) { winW = reqW > 0 ? reqW : 640; winH = reqH > 0 ? reqH : 480; }
++   else if (reqW > 0 && reqH > 0) { winW = reqW; winH = reqH; flags |= SDL_WINDOW_FULLSCREEN; }
++   else { winW = desk.w; winH = desk.h; flags |= SDL_WINDOW_FULLSCREEN_DESKTOP; }
++
++   window = SDL_CreateWindow("MiSTerFiles", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, winW, winH, flags);
++   if (window == NULL) { std::cerr << "Groovy: window: " << SDL_GetError() << std::endl; return NULL; }
++   if ((flags & SDL_WINDOW_FULLSCREEN) == SDL_WINDOW_FULLSCREEN)
++   {
++      // exact mode switch: closest mode the display offers
++      SDL_DisplayMode want = { 0, reqW, reqH, 0, 0 }, got;
++      if (SDL_GetClosestDisplayMode(0, &want, &got) != NULL) SDL_SetWindowDisplayMode(window, &got);
++   }
++   SDL_ShowCursor(SDL_DISABLE);
++   SDL_GetWindowSize(window, &winW, &winH);
++
++   // Logical UI size: the window size, or RENDER_SIZE=WxH (then scaled to the window)
++   screenW = winW; screenH = winH;
++   int rw = 0, rh = 0;
++   if (sscanf(setting("RENDER_SIZE", "").c_str(), "%dx%d", &rw, &rh) == 2 && rw >= 160 && rh >= 120) { screenW = rw; screenH = rh; }
++   std::cout << "Groovy: window " << winW << "x" << winH << (windowed ? " (windowed)" : " (fullscreen)") << ", UI " << screenW << "x" << screenH << std::endl;
++
++   std::string lr = setting("LOWRES", "auto");
++   lowRes = (lr == "auto" || lr.empty()) ? (screenH < 400) : (atoi(lr.c_str()) != 0);
++
++   backSurface = SDL_CreateRGBSurfaceWithFormat(0, screenW, screenH, 32, SDL_PIXELFORMAT_XRGB8888);
++   if (backSurface == NULL) { std::cerr << "Groovy: surface: " << SDL_GetError() << std::endl; return NULL; }
++   renderer = SDL_CreateSoftwareRenderer(backSurface);
++   if (renderer == NULL) { std::cerr << "Groovy: renderer: " << SDL_GetError() << std::endl; return NULL; }
++   setOverscan(atoi(setting("OVERSCAN", "0").c_str()));
++   std::cout << "Groovy: overscan " << overscan << "% (aspect " << displayAspect << ") -> margins " << marginX << "x" << marginY
++             << ", safe area " << (screenW - 2 * marginX) << "x" << (screenH - 2 * marginY) << std::endl;
++
++   signal(SIGINT, signalHandler);
++   signal(SIGTERM, signalHandler);
++   signal(SIGHUP, signalHandler);
++
++   // Input: keyboard events from SDL + gamepads, translated by the bindings
++   loadBindings();
++   debugInput = getenv("MF_DEBUG_INPUT") && atoi(getenv("MF_DEBUG_INPUT")) != 0;
++   SDL_SetEventFilter(eventFilter, NULL);
++   useJoystick = atoi(setting("JOYSTICK", "1").c_str()) != 0;
++   if (useJoystick)
++   {
++      if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0)
++      {
++         std::string db = setting("GAMECONTROLLERDB", "./res/gamecontrollerdb.txt");
++         int n = SDL_GameControllerAddMappingsFromFile(db.c_str());
++         if (n > 0) std::cout << "Groovy: loaded " << n << " controller mappings from " << db << std::endl;
++         SDL_PumpEvents();
++         padsAdded.clear();
++         for (int i = 0; i < SDL_NumJoysticks(); ++i) openPad(i);
++      }
++      else
++      {
++         std::cerr << "Groovy: SDL gamecontroller init failed: " << SDL_GetError() << std::endl;
++         useJoystick = false;
++      }
++   }
++   if (getenv("MF_INPUT_FILE"))
++   {
++      int fd = open(getenv("MF_INPUT_FILE"), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++      if (fd >= 0) { EvDev d; d.path = getenv("MF_INPUT_FILE"); d.fd = fd; evdevs.push_back(d); }
++   }
++   lastScan = SDL_GetTicks();
++   return renderer;
++}
++#else
++SDL_Renderer *MiSTer::init(void)
++{
++   const char *fbPath = getenv("MF_FBDEV") ? getenv("MF_FBDEV") : "/dev/fb0";
++   const char *fake = getenv("MF_FAKEFB");   // "WxH": no framebuffer, for off-target testing
++   screenshotPath = getenv("MF_SCREENSHOT");
++   Uint32 rmask = 0x00FF0000, gmask = 0x0000FF00, bmask = 0x000000FF;
++   int bpp = 32;
++
++   if (fake != NULL && sscanf(fake, "%dx%d", &screenW, &screenH) == 2)
++   {
++      std::cout << "MiSTer: fake framebuffer " << screenW << "x" << screenH << std::endl;
++   }
++   else
++   {
++      fbFd = open(fbPath, O_RDWR | O_CLOEXEC);
++      if (fbFd < 0) { std::cerr << "MiSTer: cannot open " << fbPath << ": " << strerror(errno) << std::endl; return NULL; }
++      struct fb_var_screeninfo var;
++      struct fb_fix_screeninfo fix;
++      if (ioctl(fbFd, FBIOGET_VSCREENINFO, &var) < 0 || ioctl(fbFd, FBIOGET_FSCREENINFO, &fix) < 0)
++      {
++         std::cerr << "MiSTer: framebuffer ioctl failed: " << strerror(errno) << std::endl;
++         return NULL;
++      }
++      screenW = var.xres;
++      screenH = var.yres;
++      bpp = var.bits_per_pixel;
++      fbPitch = fix.line_length;
++      std::cout << "MiSTer: " << fbPath << " " << var.xres << "x" << var.yres << " (virtual " << var.xres_virtual << "x" << var.yres_virtual
++                << ") " << bpp << "bpp pitch " << fbPitch << " R" << var.red.offset << "/" << var.red.length
++                << " G" << var.green.offset << "/" << var.green.length << " B" << var.blue.offset << "/" << var.blue.length << std::endl;
++      if (bpp != 32 && bpp != 16)
++      {
++         std::cerr << "MiSTer: unsupported framebuffer depth " << bpp << " (use vmode -r W H rgb32)" << std::endl;
++         return NULL;
++      }
++      rmask = ((1u << var.red.length) - 1) << var.red.offset;
++      gmask = ((1u << var.green.length) - 1) << var.green.offset;
++      bmask = ((1u << var.blue.length) - 1) << var.blue.offset;
++      fbMemSize = fix.smem_len;
++      fbOffset = var.yoffset * fix.line_length + var.xoffset * (bpp / 8);
++      fbMem = (uint8_t *)mmap(NULL, fbMemSize, PROT_READ | PROT_WRITE, MAP_SHARED, fbFd, 0);
++      if (fbMem == MAP_FAILED) { fbMem = NULL; std::cerr << "MiSTer: mmap failed: " << strerror(errno) << std::endl; return NULL; }
++      if (fbOffset + (size_t)fbPitch * screenH > fbMemSize) fbOffset = 0;
++   }
++
++   // MF_SWAP_RB=1: swap red/blue if colors come out wrong on the real hardware
++   if (getenv("MF_SWAP_RB") && atoi(getenv("MF_SWAP_RB")) != 0) { Uint32 t = rmask; rmask = bmask; bmask = t; }
++
++   if (getenv("MF_LOWRES")) lowRes = atoi(getenv("MF_LOWRES")) != 0;
++   else lowRes = screenH < 400;
++
++   backSurface = SDL_CreateRGBSurface(0, screenW, screenH, bpp, rmask, gmask, bmask, 0);
++   if (backSurface == NULL) { std::cerr << "MiSTer: surface: " << SDL_GetError() << std::endl; return NULL; }
++   renderer = SDL_CreateSoftwareRenderer(backSurface);
++   if (renderer == NULL) { std::cerr << "MiSTer: renderer: " << SDL_GetError() << std::endl; return NULL; }
++   setOverscan(getenv("MF_OVERSCAN") ? atoi(getenv("MF_OVERSCAN")) : 0);
++   std::cout << "MiSTer: overscan " << overscan << "% -> margins " << marginX << "x" << marginY
++             << ", safe area " << (screenW - 2 * marginX) << "x" << (screenH - 2 * marginY) << std::endl;
++
++   if (fbFd >= 0) consoleSetup();
++   signal(SIGINT, signalHandler);
++   signal(SIGTERM, signalHandler);
++   signal(SIGHUP, signalHandler);
++   signal(SIGSEGV, signalHandler);
++   signal(SIGABRT, signalHandler);
++
++   // Input
++   useJoystick = getenv("MF_JOYSTICK") && atoi(getenv("MF_JOYSTICK")) != 0;
++   if (useJoystick)
++   {
++      SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++      if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0)
++      {
++         const char *db = getenv("MF_GAMECONTROLLERDB") ? getenv("MF_GAMECONTROLLERDB") : "./res/gamecontrollerdb.txt";
++         int n = SDL_GameControllerAddMappingsFromFile(db);
++         if (n > 0) std::cout << "MiSTer: loaded " << n << " controller mappings from " << db << std::endl;
++         for (int i = 0; i < SDL_NumJoysticks(); ++i) openPad(i);
++      }
++      else
++      {
++         std::cerr << "MiSTer: SDL gamecontroller init failed: " << SDL_GetError() << std::endl;
++         useJoystick = false;
++      }
++   }
++   // Debug aid: MF_INPUT_FILE=<fifo> carrying raw struct input_event records
++   if (getenv("MF_INPUT_FILE"))
++   {
++      int fd = open(getenv("MF_INPUT_FILE"), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++      if (fd >= 0) { EvDev d; d.path = getenv("MF_INPUT_FILE"); d.fd = fd; evdevs.push_back(d); }
++   }
++   scanEvdev();
++   lastScan = SDL_GetTicks();
++   return renderer;
++}
++#endif
++
++//------------------------------------------------------------------------------
++
++int MiSTer::overscanMarginY(int pct)
++{
++   if (pct < 0) pct = 0;
++   if (pct > OVERSCAN_MAX) pct = OVERSCAN_MAX;
++   return (int)lround(screenH * pct / 100.0);
++}
++
++int MiSTer::overscanMarginX(int pct)
++{
++   // Same physical size as the vertical margin on a 4:3 (displayAspect) display:
++   // pixel aspect = (4/3) / (W/H)  =>  marginX = marginY * (W/H) * 3/4
++   return (int)lround(overscanMarginY(pct) * ((double)screenW / screenH) / displayAspect);
++}
++
++void MiSTer::setOverscan(int pct)
++{
++   if (pct < 0) pct = 0;
++   if (pct > OVERSCAN_MAX) pct = OVERSCAN_MAX;
++   overscan = pct;
++   marginX = overscanMarginX(pct);
++   marginY = overscanMarginY(pct);
++   if (renderer != NULL)
++   {
++      SDL_Rect vp = { marginX, marginY, screenW - 2 * marginX, screenH - 2 * marginY };
++      SDL_RenderSetViewport(renderer, &vp);
++   }
++}
++
++//------------------------------------------------------------------------------
++
++bool MiSTer::saveSetting(const char *key, int value)
++{
++   std::string path = getenv("MF_INI") ? getenv("MF_INI") : "./MiSTerFiles.ini";
++   std::string example = getenv("MF_INI_EXAMPLE") ? getenv("MF_INI_EXAMPLE") : "./MiSTerFiles.ini.example";
++
++   // Read the current file, or the example as a starting point
++   std::vector<std::string> lines;
++   bool crlf = false;
++   {
++      std::ifstream in(path.c_str(), std::ios::binary);
++      if (!in.good()) in.open(example.c_str(), std::ios::binary);
++      std::string line;
++      while (in.good() && std::getline(in, line))
++      {
++         if (!line.empty() && line[line.size() - 1] == '\r') { line.erase(line.size() - 1); crlf = true; }
++         lines.push_back(line);
++      }
++   }
++
++   // Replace every "KEY=..." line (bash: last one wins, keep them consistent), else append
++   std::ostringstream val;
++   val << key << "=" << value;
++   bool found = false;
++   const size_t klen = strlen(key);
++   for (size_t i = 0; i < lines.size(); ++i)
++   {
++      size_t p = lines[i].find_first_not_of(" \t");
++      if (p == std::string::npos || lines[i].compare(p, klen, key) != 0) continue;
++      size_t q = lines[i].find_first_not_of(" \t", p + klen);
++      if (q == std::string::npos || lines[i][q] != '=') continue;
++      lines[i] = val.str();
++      found = true;
++   }
++   if (!found) lines.push_back(val.str());
++
++   // Write to a temporary file, then rename over the original
++   std::string tmp = path + ".tmp";
++   FILE *f = fopen(tmp.c_str(), "wb");
++   if (f == NULL) { std::cerr << "MiSTer: cannot write " << tmp << ": " << strerror(errno) << std::endl; return false; }
++   for (size_t i = 0; i < lines.size(); ++i)
++      fprintf(f, "%s%s", lines[i].c_str(), crlf ? "\r\n" : "\n");
++   bool ok = (fflush(f) == 0);
++   fsync(fileno(f));
++   ok = (fclose(f) == 0) && ok;
++   if (ok && rename(tmp.c_str(), path.c_str()) != 0)
++   {
++      // Some filesystems refuse to rename over an existing file: replace it
++      unlink(path.c_str());
++      ok = (rename(tmp.c_str(), path.c_str()) == 0);
++   }
++   if (!ok) { std::cerr << "MiSTer: cannot save " << path << ": " << strerror(errno) << std::endl; unlink(tmp.c_str()); return false; }
++   sync();
++   std::cout << "MiSTerFiles: saved " << val.str() << " in " << path << std::endl;
++   return true;
++}
++
++//------------------------------------------------------------------------------
++
++void MiSTer::present(void)
++{
++   // Everything outside the safe area is black
++   if (backSurface != NULL && (marginX > 0 || marginY > 0))
++   {
++      Uint32 black = SDL_MapRGB(backSurface->format, 0, 0, 0);
++      SDL_Rect r[4] = { { 0, 0, screenW, marginY }, { 0, screenH - marginY, screenW, marginY },
++                        { 0, marginY, marginX, screenH - 2 * marginY }, { screenW - marginX, marginY, marginX, screenH - 2 * marginY } };
++      // The software renderer clips the surface to the viewport: lift it while filling
++      SDL_Rect clip;
++      SDL_GetClipRect(backSurface, &clip);
++      SDL_SetClipRect(backSurface, NULL);
++      SDL_FillRects(backSurface, r, 4, black);
++      SDL_SetClipRect(backSurface, &clip);
++   }
++   if (screenshotPath != NULL) saveScreenshot();   // debug aid (MF_SCREENSHOT=/tmp/x.ppm)
++   #if defined(DEVICE_GROOVY)
++   if (window == NULL || backSurface == NULL) return;
++   SDL_Surface *ws = SDL_GetWindowSurface(window);   // re-created by SDL if the window changed
++   if (ws == NULL) { static bool told = false; if (!told) { std::cerr << "Groovy: window surface: " << SDL_GetError() << std::endl; told = true; } return; }
++   if (ws->w == screenW && ws->h == screenH) SDL_BlitSurface(backSurface, NULL, ws, NULL);
++   else SDL_BlitScaled(backSurface, NULL, ws, NULL);   // RENDER_SIZE != window size: nearest-neighbour stretch
++   SDL_UpdateWindowSurface(window);
++   return;
++   #endif
++   if (fbMem == NULL || backSurface == NULL) return;
++   const int rowBytes = screenW * backSurface->format->BytesPerPixel;
++   uint8_t *dst = fbMem + fbOffset;
++   const uint8_t *src = (const uint8_t *)backSurface->pixels;
++   for (int y = 0; y < screenH; ++y)
++      memcpy(dst + (size_t)y * fbPitch, src + (size_t)y * backSurface->pitch, rowBytes);
++}
++
++//------------------------------------------------------------------------------
++
++void MiSTer::pumpInput(void)
++{
++   #if defined(DEVICE_GROOVY)
++   readEvdev();          // only the MF_INPUT_FILE test hook
++   SDL_PumpEvents();     // keyboard/joystick events go through eventFilter
++   while (!padsAdded.empty()) { int i = padsAdded.back(); padsAdded.pop_back(); if (useJoystick) openPad(i); }
++   while (!padsRemoved.empty()) { SDL_JoystickID id = padsRemoved.back(); padsRemoved.pop_back(); closePad(id); }
++   if (useJoystick) pollPads();
++   return;
++   #endif
++   // Hotplug: rescan input devices every second
++   if (SDL_GetTicks() - lastScan > 1000) { scanEvdev(); lastScan = SDL_GetTicks(); }
++   readEvdev();
++   if (useJoystick)
++   {
++      SDL_PumpEvents();
++      SDL_Event e;
++      while (SDL_PeepEvents(&e, 1, SDL_GETEVENT, SDL_JOYAXISMOTION, SDL_CONTROLLERSENSORUPDATE) > 0)
++      {
++         if (e.type == SDL_JOYDEVICEADDED) openPad(e.jdevice.which);
++         else if (e.type == SDL_JOYDEVICEREMOVED) closePad(e.jdevice.which);
++      }
++      pollPads();
++   }
++}
++
++//------------------------------------------------------------------------------
++
++bool MiSTer::held(SDL_Scancode sc)
++{
++   return sc > SDL_SCANCODE_UNKNOWN && sc < SDL_NUM_SCANCODES && holdCount[sc] > 0;
++}
++
++//------------------------------------------------------------------------------
++
++void MiSTer::close(void)
++{
++   if (fbMem != NULL)
++   {
++      // Clear the screen so the console comes back clean
++      for (int y = 0; y < screenH; ++y) memset(fbMem + fbOffset + (size_t)y * fbPitch, 0, fbPitch);
++      munmap(fbMem, fbMemSize);
++      fbMem = NULL;
++   }
++   consoleRestore();
++   if (ttyFd >= 0) { ::close(ttyFd); ttyFd = -1; }
++   if (fbFd >= 0) { ::close(fbFd); fbFd = -1; }
++   for (size_t i = 0; i < evdevs.size(); ++i) ::close(evdevs[i].fd);
++   evdevs.clear();
++   while (!pads.empty()) closePad(pads.back().id);
++   renderer = NULL;   // destroyed by SDLUtils::close() before calling us
++   if (backSurface) { SDL_FreeSurface(backSurface); backSurface = NULL; }
++   #if defined(DEVICE_GROOVY)
++   SDL_SetEventFilter(NULL, NULL);
++   if (window) { SDL_DestroyWindow(window); window = NULL; }
++   #endif
++}
++
++#endif // DEVICE_MISTER || DEVICE_GROOVY
+diff --git a/src/mister.h b/src/mister.h
+new file mode 100644
+index 0000000..37750a9
+--- /dev/null
++++ b/src/mister.h
+@@ -0,0 +1,59 @@
++#ifndef _MISTER_H_
++#define _MISTER_H_
++
++// MiSTerFiles: MiSTer FPGA platform layer (fork of 351Files by Tardigrade-nx).
++// - Video: SDL software renderer drawing into an SDL_Surface that is copied
++//   to the Linux framebuffer (/dev/fb0, MiSTer_fb) on every present.
++// - Input: keyboards read directly from evdev (/dev/input/event*), which
++//   includes "MiSTer virtual input": while a script runs on the framebuffer,
++//   Main_MiSTer translates the user's mapped gamepad into keys
++//   (D-pad=arrows, A=Enter, B=Esc, X=Space, Y=Tab, L=PgUp, R=PgDn).
++//   Optionally (MF_JOYSTICK=1) gamepads are also read through SDL
++//   GameController / raw SDL joystick and translated to the same keys.
++// Everything ends up as synthesized SDL_KEYDOWN/SDL_KEYUP events.
++//
++// The same layer also serves the GroovyArcade / x86_64 Linux target (DEVICE_GROOVY):
++// - Video: normal SDL2 video driver (KMSDRM or X11, picked by SDL), fullscreen window;
++//   the frame is still rendered in software into an SDL_Surface and copied (scaled if
++//   needed) to the window surface on every present.
++// - Input: SDL keyboard events and SDL GameController/joystick, translated through the
++//   configurable bindings in MiSTerFiles.ini (KEY_A=..., JOY_A=...) into the same keys.
++
++#include <SDL.h>
++
++namespace MiSTer
++{
++   // Screen size, read from the framebuffer at startup
++   extern int screenW;
++   extern int screenH;
++   extern bool lowRes;     // true when screen height < 400 (e.g. 240p CRT)
++
++   // Overscan / safe area. OVERSCAN is a percentage of the screen height applied
++   // to all four sides; the horizontal margin is scaled for a 4:3 display so the
++   // border looks the same size on every side (640x240: marginX = 2 x marginY).
++   // The UI is drawn inside the safe area (SDL viewport), the outside is black.
++   extern int overscan;    // percent, 0..OVERSCAN_MAX
++   extern int marginX;     // pixels
++   extern int marginY;     // pixels
++   const int OVERSCAN_MAX = 15;
++   extern double displayAspect;   // physical aspect of the TV (4:3 by default; ASPECT=16:9 on GroovyArcade)
++   int  overscanMarginX(int pct);
++   int  overscanMarginY(int pct);
++   // Change overscan and apply the viewport
++   void setOverscan(int pct);
++   // Persist KEY=value in MiSTerFiles.ini (keeps other lines/comments, creates from example)
++   bool saveSetting(const char *key, int value);
++
++   // Open framebuffer (MiSTer) / window (GroovyArcade) and create software renderer. NULL on failure.
++   SDL_Renderer *init(void);
++   // Copy rendered frame to framebuffer
++   void present(void);
++   // Read input devices and push SDL key events (call before SDL_PollEvent loop)
++   void pumpInput(void);
++   // Is key held (any keyboard, or a gamepad mapped to that key)?
++   bool held(SDL_Scancode sc);
++   // Restore console, close devices
++   void close(void);
++}
++
++#endif
+diff --git a/src/overscan.cpp b/src/overscan.cpp
+new file mode 100644
+index 0000000..17f609f
+--- /dev/null
++++ b/src/overscan.cpp
+@@ -0,0 +1,94 @@
++// MiSTerFiles: "Tela / Overscan" adjust screen (MiSTer only)
++#ifdef MF_PLATFORM
++
++#include <string>
++#include <sstream>
++#include <SDL.h>
++#include "def.h"
++#include "sdlutils.h"
++#include "overscan.h"
++
++namespace
++{
++void draw(int value)
++{
++   // Preview: apply the margins being edited, the outside is blacked out by MiSTer::present()
++   MiSTer::setOverscan(value);
++   const int w = SCREEN_WIDTH, h = SCREEN_HEIGHT;
++
++   SDL_SetRenderDrawColor(g_renderer, COLOR_BODY_BG, 255);
++   SDL_RenderClear(g_renderer);
++   SDL_Rect body = { 0, 0, w, h };
++   SDL_RenderFillRect(g_renderer, &body);
++
++   // Frame around the safe area + corner marks
++   const int t = 2, c = MiSTer::lowRes ? 16 : 24;
++   SDL_SetRenderDrawColor(g_renderer, 255, 200, 0, 255);
++   SDL_Rect frame[4] = { { 0, 0, w, t }, { 0, h - t, w, t }, { 0, 0, t, h }, { w - t, 0, t, h } };
++   SDL_RenderFillRects(g_renderer, frame, 4);
++   SDL_Rect corners[8] = { { 0, 0, c, 2 * t }, { 0, 0, 2 * t, c }, { w - c, 0, c, 2 * t }, { w - 2 * t, 0, 2 * t, c },
++                           { 0, h - 2 * t, c, 2 * t }, { 0, h - c, 2 * t, c }, { w - c, h - 2 * t, c, 2 * t }, { w - 2 * t, h - c, 2 * t, c } };
++   SDL_RenderFillRects(g_renderer, corners, 8);
++
++   std::ostringstream m;
++   m << "Margem: " << value << "%  (" << MiSTer::marginX << " x " << MiSTer::marginY << " px)";
++   const char *lines[5] = { "Tela / Overscan", "", "Esquerda / Direita: ajustar", "A / Enter: salvar    B / Esc: cancelar", "As bordas amarelas devem aparecer inteiras na TV" };
++   std::string l1 = m.str();
++   lines[1] = l1.c_str();
++   const int n = 5;
++   int y = h / 2 - (n * LINE_HEIGHT) / 2 + LINE_HEIGHT / 2;
++   for (int i = 0; i < n; ++i, y += LINE_HEIGHT)
++      SDLUtils::renderText(lines[i], g_font, w / 2, y, i == 0 ? SDL_Color{255, 200, 0, 255} : SDL_Color{COLOR_TEXT_NORMAL}, {COLOR_BODY_BG},
++                           SDLUtils::T_ALIGN_CENTER, SDLUtils::T_ALIGN_MIDDLE, w - 2 * MARGIN_X, SDLUtils::T_ALIGN_CENTER);
++   SDL_RenderPresent(g_renderer);
++   MiSTer::present();
++}
++}
++
++int OverscanScreen::run(void)
++{
++   const int original = MiSTer::overscan;
++   int value = original, result = -1, holdDir = 0;
++   Uint32 nextRepeat = 0;
++   bool redraw = true, done = false;
++   SDL_Event event;
++   while (!done)
++   {
++      Uint32 now = SDL_GetTicks();
++      MiSTer::pumpInput();
++      while (!done && SDL_PollEvent(&event))
++      {
++         if (event.type == SDL_QUIT) { done = true; break; }
++         if (BUTTON_PRESSED_RIGHT || BUTTON_PRESSED_UP)
++         {
++            if (value < MiSTer::OVERSCAN_MAX) { ++value; redraw = true; }
++            holdDir = 1; nextRepeat = now + 400;
++         }
++         else if (BUTTON_PRESSED_LEFT || BUTTON_PRESSED_DOWN)
++         {
++            if (value > 0) { --value; redraw = true; }
++            holdDir = -1; nextRepeat = now + 400;
++         }
++         else if (BUTTON_PRESSED_VALIDATE) { result = value; done = true; }
++         else if (BUTTON_PRESSED_BACK) { result = -1; done = true; }
++      }
++      // Key hold: repeat
++      bool plus = BUTTON_HELD_RIGHT || BUTTON_HELD_UP, minus = BUTTON_HELD_LEFT || BUTTON_HELD_DOWN;
++      if ((holdDir > 0 && plus) || (holdDir < 0 && minus))
++      {
++         if (now >= nextRepeat)
++         {
++            int nv = value + holdDir;
++            if (nv >= 0 && nv <= MiSTer::OVERSCAN_MAX) { value = nv; redraw = true; }
++            nextRepeat = now + 120;
++         }
++      }
++      else holdDir = 0;
++      if (redraw && !done) { draw(value); redraw = false; }
++      SDL_Delay(16);
++   }
++   MiSTer::setOverscan(original);
++   return result;
++}
++
++#endif // MF_PLATFORM
+diff --git a/src/overscan.h b/src/overscan.h
+new file mode 100644
+index 0000000..6e3e876
+--- /dev/null
++++ b/src/overscan.h
+@@ -0,0 +1,13 @@
++#ifndef _OVERSCAN_H_
++#define _OVERSCAN_H_
++
++// MiSTerFiles: "Tela / Overscan" adjust screen (MiSTer only)
++namespace OverscanScreen
++{
++   // Shows the adjust screen with a live preview of the safe area.
++   // Returns the chosen value (percent) if confirmed, -1 if cancelled.
++   // On return the previous overscan is active again; the caller applies the new one.
++   int run(void);
++}
++
++#endif
+diff --git a/src/sdlutils.cpp b/src/sdlutils.cpp
+index ba56240..b6cb244 100644
+--- a/src/sdlutils.cpp
++++ b/src/sdlutils.cpp
+@@ -2,6 +2,7 @@
+ #include <SDL_image.h>
+ #include <SDL_ttf.h>
+ #include "sdlutils.h"
++#include "def.h"
+ 
+ //------------------------------------------------------------------------------
+ 
+@@ -11,7 +12,17 @@ bool SDLUtils::init()
+    INHIBIT(std::cout << "SDLUtils::Init()" << std::endl;)
+ 
+    // Initialize SDL
++   #if defined(DEVICE_GROOVY)
++   // GroovyArcade: normal SDL video (KMSDRM or X11), window + gamepads opened in MiSTer::init()
++   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0)
++   #elif defined(MF_PLATFORM)
++   // No X/KMS on MiSTer: no SDL video driver needed, we render in software
++   // and copy to /dev/fb0 ourselves (see mister.cpp). Gamepads are opened in
++   // MiSTer::init() only when MF_JOYSTICK=1.
++   if (SDL_Init(SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0)
++   #else
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0)
++   #endif
+    {
+       std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError() << std::endl;
+       return false;
+@@ -32,6 +43,16 @@ bool SDLUtils::init()
+       return false;
+    }
+ 
++   #if defined(MF_PLATFORM)
++   g_renderer = MiSTer::init();
++   if (g_renderer == NULL)
++   {
++      std::cerr << "MiSTerFiles video/input init failed" << std::endl;
++      return false;
++   }
++   return true;
++   #endif
++
+    // Initialize joystick
+    INHIBIT(std::cout << "SDL_NumJoysticks: '" << SDL_NumJoysticks() << "'" << std::endl;)
+    if (SDL_NumJoysticks() >= 1)
+@@ -86,6 +107,10 @@ void SDLUtils::close()
+       g_renderer = NULL;
+    }
+ 
++   #if defined(MF_PLATFORM)
++   MiSTer::close();
++   #endif
++
+    // Window
+    if (g_window != NULL)
+    {
+diff --git a/src/textInput.cpp b/src/textInput.cpp
+index 8d6c943..df8077c 100644
+--- a/src/textInput.cpp
++++ b/src/textInput.cpp
+@@ -44,11 +44,13 @@ void TextInput::render(const bool p_focus)
+    SDL_SetRenderDrawColor(g_renderer, COLOR_TITLE_BG, 255);
+    SDL_RenderFillRect(g_renderer, &m_dialogBackground);
+ 
+-   // Dialog icon
++   // Dialog icon + title (skipped when the keyboard leaves no room for them, e.g. 240 lines + overscan)
++   if (m_dialogBackground.y >= 0) {
+    SDLUtils::renderTexture(m_icon, m_dialogBackground.x + MARGIN_X, m_dialogBackground.y + LINE_HEIGHT/2, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
+ 
+    // Dialog title
+    SDLUtils::renderText(m_title, g_font, m_dialogBackground.x + MARGIN_X + ICON_SIZE + MARGIN_X, m_dialogBackground.y + LINE_HEIGHT/2, {COLOR_TEXT_NORMAL}, {COLOR_TITLE_BG}, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
++   }
+ 
+    // Dialog body
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BODY_BG, 255);
+diff --git a/src/window.cpp b/src/window.cpp
+index 78fb472..6590c26 100644
+--- a/src/window.cpp
++++ b/src/window.cpp
+@@ -62,6 +62,9 @@ int IWindow::execute(void)
+       l_time = SDL_GetTicks();
+ 
+       // Handle events
++      #if defined(MF_PLATFORM)
++      MiSTer::pumpInput();
++      #endif
+       while (SDL_PollEvent(&event) != 0 )
+       {
+          // Quit
+@@ -213,7 +216,9 @@ void IWindow::renderAll(void)
+ void IWindow::renderPresent(void)
+ {
+    SDL_RenderPresent(g_renderer);
+-   #ifndef DEVICE_PC
++   #if defined(MF_PLATFORM)
++   MiSTer::present();
++   #elif !defined(DEVICE_PC)
+    SDL_RenderPresent(g_renderer);
+    SDL_RenderPresent(g_renderer);
+    #endif
