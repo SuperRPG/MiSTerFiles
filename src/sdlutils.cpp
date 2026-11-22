@@ -2,6 +2,7 @@
 #include <SDL_image.h>
 #include <SDL_ttf.h>
 #include "sdlutils.h"
+#include "def.h"
 
 //------------------------------------------------------------------------------
 
@@ -11,7 +12,14 @@ bool SDLUtils::init()
    INHIBIT(std::cout << "SDLUtils::Init()" << std::endl;)
 
    // Initialize SDL
+   #if defined(DEVICE_MISTER)
+   // No X/KMS on MiSTer: no SDL video driver needed, we render in software
+   // and copy to /dev/fb0 ourselves (see mister.cpp). Gamepads are opened in
+   // MiSTer::init() only when MF_JOYSTICK=1.
+   if (SDL_Init(SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0)
+   #else
    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0)
+   #endif
    {
       std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError() << std::endl;
       return false;
@@ -31,6 +39,16 @@ bool SDLUtils::init()
       std::cerr << "SDL_ttf could not initialize! TTF_GetError: " << TTF_GetError() << std::endl;
       return false;
    }
+
+   #if defined(DEVICE_MISTER)
+   g_renderer = MiSTer::init();
+   if (g_renderer == NULL)
+   {
+      std::cerr << "MiSTer video/input init failed" << std::endl;
+      return false;
+   }
+   return true;
+   #endif
 
    // Initialize joystick
    INHIBIT(std::cout << "SDL_NumJoysticks: '" << SDL_NumJoysticks() << "'" << std::endl;)
@@ -85,6 +103,10 @@ void SDLUtils::close()
       SDL_DestroyRenderer(g_renderer);
       g_renderer = NULL;
    }
+
+   #if defined(DEVICE_MISTER)
+   MiSTer::close();
+   #endif
 
    // Window
    if (g_window != NULL)

@@ -1,6 +1,9 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <unistd.h>
+#include <limits.h>
+#include <sys/stat.h>
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include "def.h"
@@ -43,6 +46,29 @@ SDL_Texture *g_iconPlus = NULL;
 
 int main(int argc, char* args[])
 {
+   #if defined(DEVICE_MISTER)
+   // Resources are found relative to the executable (./res), whatever the cwd
+   {
+      char exe[PATH_MAX];
+      ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+      if (len > 0)
+      {
+         exe[len] = '\0';
+         std::string dir(exe);
+         dir = dir.substr(0, dir.find_last_of('/'));
+         if (!dir.empty() && chdir(dir.c_str()) != 0) {}
+      }
+   }
+   #endif
+   // Optional start directory as first argument
+   std::string startPath(START_PATH);
+   if (argc > 1)
+   {
+      struct stat st;
+      if (stat(args[1], &st) == 0 && S_ISDIR(st.st_mode))
+         startPath = args[1];
+   }
+
    // Init SDL
    if (! SDLUtils::init())
    {
@@ -86,7 +112,7 @@ int main(int argc, char* args[])
 
    // Execute main window
    {
-      MainWindow mainWindow(START_PATH);
+      MainWindow mainWindow(startPath);
       mainWindow.execute();
    }
 

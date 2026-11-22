@@ -8,10 +8,28 @@
 //~ #define INHIBIT(X) X
 #define INHIBIT(X) /* X */
 
-#define APP_NAME "351Files"
+#define APP_NAME "MiSTerFiles"
+
+// Parameters for MiSTer FPGA (DE10-Nano). Screen size comes from the
+// framebuffer at runtime; a compact layout is used below 400 lines (CRT 240p).
+#if defined(DEVICE_MISTER)
+   #include "mister.h"
+   #define SCREEN_WIDTH             (MiSTer::screenW)
+   #define SCREEN_HEIGHT            (MiSTer::screenH)
+   #define HARDWARE_ACCELERATION    0
+   #define FULLSCREEN               1
+   #define FONT_NAME                "NotoSans-Regular.ttf"
+   #define FONT_NAME_MONO           "NotoSansMono-Regular.ttf"
+   #define FONT_SIZE                (MiSTer::lowRes ? 14 : 20)
+   #define LINE_HEIGHT              (MiSTer::lowRes ? 24 : 32)
+   #define ICON_SIZE                24
+   #define MARGIN_X                 (MiSTer::lowRes ? 8 : 10)
+   #define KEYBOARD_MARGIN          (MiSTer::lowRes ? 3 : 8)
+   #define KEYBOARD_KEY_SPACING     (MiSTer::lowRes ? 3 : 4)
+   #define KEYBOARD_SYMBOL_SIZE     24
 
 // Parameters for RG351P
-#if defined(DEVICE_RG351P)
+#elif defined(DEVICE_RG351P)
    #define SCREEN_WIDTH             480
    #define SCREEN_HEIGHT            320
    #define HARDWARE_ACCELERATION    0
@@ -150,7 +168,31 @@
 #define VIEWER_SCROLL_SPEED      20
 
 // Button events
-#if defined(DEVICE_RG351P)
+#if defined(DEVICE_MISTER)
+   // Everything arrives as keys (keyboard, Main_MiSTer virtual input from the mapped
+   // gamepad, or SDL gamepads translated in mister.cpp):
+   // arrows = move, Enter/A = open, Esc/Backspace/B = back, Space/Insert/X = select,
+   // Tab/Menu/x/F1/Y = context menu, PgUp/PgDn/L/R = page up/down
+   #define MISTER_KEY(K)                  (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.scancode == SDL_SCANCODE_##K)
+   #define BUTTON_PRESSED_UP              (MISTER_KEY(UP) || MISTER_KEY(KP_8))
+   #define BUTTON_PRESSED_DOWN            (MISTER_KEY(DOWN) || MISTER_KEY(KP_2))
+   #define BUTTON_PRESSED_LEFT            (MISTER_KEY(LEFT) || MISTER_KEY(KP_4))
+   #define BUTTON_PRESSED_RIGHT           (MISTER_KEY(RIGHT) || MISTER_KEY(KP_6))
+   #define BUTTON_PRESSED_PAGEUP          (MISTER_KEY(PAGEUP) || MISTER_KEY(HOME))
+   #define BUTTON_PRESSED_PAGEDOWN        (MISTER_KEY(PAGEDOWN) || MISTER_KEY(END))
+   #define BUTTON_PRESSED_VALIDATE        (MISTER_KEY(RETURN) || MISTER_KEY(KP_ENTER))
+   #define BUTTON_PRESSED_BACK            (MISTER_KEY(ESCAPE) || MISTER_KEY(BACKSPACE))
+   #define BUTTON_PRESSED_MENU_CONTEXT    (MISTER_KEY(TAB) || MISTER_KEY(X) || MISTER_KEY(MENU) || MISTER_KEY(APPLICATION) || MISTER_KEY(F1))
+   #define BUTTON_PRESSED_SELECT          (MISTER_KEY(SPACE) || MISTER_KEY(INSERT))
+   #define BUTTON_HELD_UP                 (MiSTer::held(SDL_SCANCODE_UP) || MiSTer::held(SDL_SCANCODE_KP_8))
+   #define BUTTON_HELD_DOWN               (MiSTer::held(SDL_SCANCODE_DOWN) || MiSTer::held(SDL_SCANCODE_KP_2))
+   #define BUTTON_HELD_LEFT               (MiSTer::held(SDL_SCANCODE_LEFT) || MiSTer::held(SDL_SCANCODE_KP_4))
+   #define BUTTON_HELD_RIGHT              (MiSTer::held(SDL_SCANCODE_RIGHT) || MiSTer::held(SDL_SCANCODE_KP_6))
+   #define BUTTON_HELD_PAGEUP             (MiSTer::held(SDL_SCANCODE_PAGEUP) || MiSTer::held(SDL_SCANCODE_HOME))
+   #define BUTTON_HELD_PAGEDOWN           (MiSTer::held(SDL_SCANCODE_PAGEDOWN) || MiSTer::held(SDL_SCANCODE_END))
+   #define BUTTON_HELD_SELECT             (MiSTer::held(SDL_SCANCODE_SPACE) || MiSTer::held(SDL_SCANCODE_INSERT))
+   #define BUTTON_HELD_VALIDATE           (MiSTer::held(SDL_SCANCODE_RETURN) || MiSTer::held(SDL_SCANCODE_KP_ENTER))
+#elif defined(DEVICE_RG351P)
    #define BUTTON_PRESSED_UP              event.type == SDL_JOYHATMOTION && event.jhat.value == SDL_HAT_UP
    #define BUTTON_PRESSED_DOWN            event.type == SDL_JOYHATMOTION && event.jhat.value == SDL_HAT_DOWN
    #define BUTTON_PRESSED_LEFT            event.type == SDL_JOYHATMOTION && event.jhat.value == SDL_HAT_LEFT
