@@ -10,6 +10,9 @@
 #include "textViewer.h"
 #include "textEditor.h"
 #include "imageViewer.h"
+#if defined(DEVICE_MISTER)
+#include "overscan.h"
+#endif
 
 // Destructor
 MainWindow::~MainWindow(void)
@@ -388,6 +391,9 @@ void MainWindow::openContextMenu(void)
       l_dialog.addOption("Select all", 5, g_iconSelect);
       l_dialog.addOption("Select none", 6, g_iconNone);
       l_dialog.addOption("New directory", 7, g_iconNewDir);
+      #if defined(DEVICE_MISTER)
+      l_dialog.addOption("Tela / Overscan", 10, g_iconImage);
+      #endif
       l_dialog.addOption("Quit", 8, g_iconQuit);
       result = l_dialog.execute();
    }
@@ -444,6 +450,31 @@ void MainWindow::openContextMenu(void)
       case 8:
          m_retVal = 0;
          break;
+      #if defined(DEVICE_MISTER)
+      // Screen / overscan adjust
+      case 10:
+      {
+         int value = OverscanScreen::run();
+         if (value >= 0 && value != MiSTer::overscan)
+         {
+            MiSTer::setOverscan(value);
+            if (! MiSTer::saveSetting("OVERSCAN", value))
+            {
+               Dialog l_err("Erro");
+               l_err.addLabel("Nao foi possivel salvar o MiSTerFiles.ini");
+               l_err.addOption("OK", 0);
+               l_err.execute();
+            }
+            // Lay out the list again for the new safe area
+            m_nbVisibleLines = (SCREEN_HEIGHT - LINE_HEIGHT) / LINE_HEIGHT;
+            m_scrollbar.x = SCREEN_WIDTH - MARGIN_X;
+            adjustScrollbar();
+            adjustCamera();
+         }
+         g_hasChanged = true;
+      }
+      break;
+      #endif
       // New directory
       case 7:
       {

@@ -7,6 +7,10 @@
 #include <cerrno>
 #include <csignal>
 #include <map>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+#include <sys/stat.h>
 #include <vector>
 #include <string>
 #include <iostream>
@@ -26,6 +30,9 @@ namespace MiSTer
 int screenW = 640;
 int screenH = 480;
 bool lowRes = false;
+int overscan = 0;
+int marginX = 0;
+int marginY = 0;
 }
 
 namespace
@@ -391,6 +398,9 @@ SDL_Renderer *MiSTer::init(void)
    if (backSurface == NULL) { std::cerr << "MiSTer: surface: " << SDL_GetError() << std::endl; return NULL; }
    renderer = SDL_CreateSoftwareRenderer(backSurface);
    if (renderer == NULL) { std::cerr << "MiSTer: renderer: " << SDL_GetError() << std::endl; return NULL; }
+   setOverscan(getenv("MF_OVERSCAN") ? atoi(getenv("MF_OVERSCAN")) : 0);
+   std::cout << "MiSTer: overscan " << overscan << "% -> margins " << marginX << "x" << marginY
+             << ", safe area " << (screenW - 2 * marginX) << "x" << (screenH - 2 * marginY) << std::endl;
 
    if (fbFd >= 0) consoleSetup();
    signal(SIGINT, signalHandler);
@@ -430,8 +440,109 @@ SDL_Renderer *MiSTer::init(void)
 
 //------------------------------------------------------------------------------
 
+int MiSTer::overscanMarginY(int pct)
+{
+   if (pct < 0) pct = 0;
+   if (pct > OVERSCAN_MAX) pct = OVERSCAN_MAX;
+   return (int)lround(screenH * pct / 100.0);
+}
+
+int MiSTer::overscanMarginX(int pct)
+{
+   // Same physical size as the vertical margin on a 4:3 display:
+   // pixel aspect = (4/3) / (W/H)  =>  marginX = marginY * (W/H) * 3/4
+   return (int)lround(overscanMarginY(pct) * ((double)screenW / screenH) * 0.75);
+}
+
+void MiSTer::setOverscan(int pct)
+{
+   if (pct < 0) pct = 0;
+   if (pct > OVERSCAN_MAX) pct = OVERSCAN_MAX;
+   overscan = pct;
+   marginX = overscanMarginX(pct);
+   marginY = overscanMarginY(pct);
+   if (renderer != NULL)
+   {
+      SDL_Rect vp = { marginX, marginY, screenW - 2 * marginX, screenH - 2 * marginY };
+      SDL_RenderSetViewport(renderer, &vp);
+   }
+}
+
+//------------------------------------------------------------------------------
+
+bool MiSTer::saveSetting(const char *key, int value)
+{
+   std::string path = getenv("MF_INI") ? getenv("MF_INI") : "./MiSTerFiles.ini";
+   std::string example = getenv("MF_INI_EXAMPLE") ? getenv("MF_INI_EXAMPLE") : "./MiSTerFiles.ini.example";
+
+   // Read the current file, or the example as a starting point
+   std::vector<std::string> lines;
+   bool crlf = false;
+   {
+      std::ifstream in(path.c_str(), std::ios::binary);
+      if (!in.good()) in.open(example.c_str(), std::ios::binary);
+      std::string line;
+      while (in.good() && std::getline(in, line))
+      {
+         if (!line.empty() && line[line.size() - 1] == '\r') { line.erase(line.size() - 1); crlf = true; }
+         lines.push_back(line);
+      }
+   }
+
+   // Replace every "KEY=..." line (bash: last one wins, keep them consistent), else append
+   std::ostringstream val;
+   val << key << "=" << value;
+   bool found = false;
+   const size_t klen = strlen(key);
+   for (size_t i = 0; i < lines.size(); ++i)
+   {
+      size_t p = lines[i].find_first_not_of(" \t");
+      if (p == std::string::npos || lines[i].compare(p, klen, key) != 0) continue;
+      size_t q = lines[i].find_first_not_of(" \t", p + klen);
+      if (q == std::string::npos || lines[i][q] != '=') continue;
+      lines[i] = val.str();
+      found = true;
+   }
+   if (!found) lines.push_back(val.str());
+
+   // Write to a temporary file, then rename over the original
+   std::string tmp = path + ".tmp";
+   FILE *f = fopen(tmp.c_str(), "wb");
+   if (f == NULL) { std::cerr << "MiSTer: cannot write " << tmp << ": " << strerror(errno) << std::endl; return false; }
+   for (size_t i = 0; i < lines.size(); ++i)
+      fprintf(f, "%s%s", lines[i].c_str(), crlf ? "\r\n" : "\n");
+   bool ok = (fflush(f) == 0);
+   fsync(fileno(f));
+   ok = (fclose(f) == 0) && ok;
+   if (ok && rename(tmp.c_str(), path.c_str()) != 0)
+   {
+      // Some filesystems refuse to rename over an existing file: replace it
+      unlink(path.c_str());
+      ok = (rename(tmp.c_str(), path.c_str()) == 0);
+   }
+   if (!ok) { std::cerr << "MiSTer: cannot save " << path << ": " << strerror(errno) << std::endl; unlink(tmp.c_str()); return false; }
+   sync();
+   std::cout << "MiSTer: saved " << val.str() << " in " << path << std::endl;
+   return true;
+}
+
+//------------------------------------------------------------------------------
+
 void MiSTer::present(void)
 {
+   // Everything outside the safe area is black
+   if (backSurface != NULL && (marginX > 0 || marginY > 0))
+   {
+      Uint32 black = SDL_MapRGB(backSurface->format, 0, 0, 0);
+      SDL_Rect r[4] = { { 0, 0, screenW, marginY }, { 0, screenH - marginY, screenW, marginY },
+                        { 0, marginY, marginX, screenH - 2 * marginY }, { screenW - marginX, marginY, marginX, screenH - 2 * marginY } };
+      // The software renderer clips the surface to the viewport: lift it while filling
+      SDL_Rect clip;
+      SDL_GetClipRect(backSurface, &clip);
+      SDL_SetClipRect(backSurface, NULL);
+      SDL_FillRects(backSurface, r, 4, black);
+      SDL_SetClipRect(backSurface, &clip);
+   }
    if (screenshotPath != NULL) saveScreenshot();   // debug aid (MF_SCREENSHOT=/tmp/x.ppm)
    if (fbMem == NULL || backSurface == NULL) return;
    const int rowBytes = screenW * backSurface->format->BytesPerPixel;

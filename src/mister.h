@@ -21,6 +21,21 @@ namespace MiSTer
    extern int screenH;
    extern bool lowRes;     // true when screen height < 400 (e.g. 240p CRT)
 
+   // Overscan / safe area. OVERSCAN is a percentage of the screen height applied
+   // to all four sides; the horizontal margin is scaled for a 4:3 display so the
+   // border looks the same size on every side (640x240: marginX = 2 x marginY).
+   // The UI is drawn inside the safe area (SDL viewport), the outside is black.
+   extern int overscan;    // percent, 0..OVERSCAN_MAX
+   extern int marginX;     // pixels
+   extern int marginY;     // pixels
+   const int OVERSCAN_MAX = 15;
+   int  overscanMarginX(int pct);
+   int  overscanMarginY(int pct);
+   // Change overscan and apply the viewport
+   void setOverscan(int pct);
+   // Persist KEY=value in MiSTerFiles.ini (keeps other lines/comments, creates from example)
+   bool saveSetting(const char *key, int value);
+
    // Open framebuffer and create software renderer. Returns NULL on failure.
    SDL_Renderer *init(void);
    // Copy rendered frame to framebuffer

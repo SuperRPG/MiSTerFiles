@@ -66,8 +66,18 @@ void Dialog::render(const bool p_focus)
    if (l_dialogDim.w > SCREEN_WIDTH)
       l_dialogDim.w = SCREEN_WIDTH;
 
+   // Number of option lines that fit on screen; scroll if needed
+   int l_nbShown = m_options.size();
+   int l_maxShown = (SCREEN_HEIGHT - LINE_HEIGHT - DIALOG_BORDER) / LINE_HEIGHT - (int)m_labels.size();
+   if (l_maxShown < 1) l_maxShown = 1;
+   if (l_nbShown > l_maxShown) l_nbShown = l_maxShown;
+   if (m_cursor < m_camera.y) m_camera.y = m_cursor;
+   if (m_cursor >= m_camera.y + l_nbShown) m_camera.y = m_cursor - l_nbShown + 1;
+   if (m_camera.y > (int)m_options.size() - l_nbShown) m_camera.y = m_options.size() - l_nbShown;
+   if (m_camera.y < 0) m_camera.y = 0;
+
    // Render dialog background
-   l_dialogDim.h = LINE_HEIGHT + (m_labels.size() + m_options.size()) * LINE_HEIGHT + DIALOG_BORDER;
+   l_dialogDim.h = LINE_HEIGHT + (m_labels.size() + l_nbShown) * LINE_HEIGHT + DIALOG_BORDER;
    l_dialogDim.x = (SCREEN_WIDTH - l_dialogDim.w) / 2;
    l_dialogDim.y = (SCREEN_HEIGHT - l_dialogDim.h) / 2;
    SDL_SetRenderDrawColor(g_renderer, COLOR_TITLE_BG, 255);
@@ -107,21 +117,39 @@ void Dialog::render(const bool p_focus)
       else
          SDL_SetRenderDrawColor(g_renderer, COLOR_CURSOR_NO_FOCUS, 255);
       l_rect.x = l_dialogDim.x + DIALOG_BORDER;
-      l_rect.y = l_dialogDim.y + LINE_HEIGHT + (m_cursor + m_labels.size()) * LINE_HEIGHT;
+      l_rect.y = l_dialogDim.y + LINE_HEIGHT + (m_cursor - m_camera.y + m_labels.size()) * LINE_HEIGHT;
       l_rect.w = l_dialogDim.w - 2 * DIALOG_BORDER;
       l_rect.h = LINE_HEIGHT;
       SDL_RenderFillRect(g_renderer, &l_rect);
    }
 
    // Display options
-   for (l_tex = l_texOptions.begin(), l_icon = m_optionIcons.begin(); l_tex != l_texOptions.end(); ++l_tex, ++l_icon)
+   int l_index = 0;
+   for (l_tex = l_texOptions.begin(), l_icon = m_optionIcons.begin(); l_tex != l_texOptions.end(); ++l_tex, ++l_icon, ++l_index)
    {
+      if (l_index < m_camera.y || l_index >= m_camera.y + l_nbShown)
+         continue;
       // Icon
       if (*l_icon != NULL)
          SDLUtils::renderTexture(*l_icon, l_dialogDim.x + DIALOG_BORDER + MARGIN_X, l_y, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
       // Text
       SDLUtils::renderTexture(*l_tex, l_dialogDim.x + DIALOG_BORDER + MARGIN_X + (*l_icon == NULL ? 0 : ICON_SIZE + MARGIN_X), l_y, SDLUtils::T_ALIGN_LEFT, SDLUtils::T_ALIGN_MIDDLE);
       l_y += LINE_HEIGHT;
+   }
+
+   // Scroll indicator
+   if (l_nbShown < (int)m_options.size())
+   {
+      int l_areaY = l_dialogDim.y + LINE_HEIGHT + m_labels.size() * LINE_HEIGHT;
+      int l_areaH = l_nbShown * LINE_HEIGHT;
+      SDL_Rect l_bar;
+      l_bar.w = DIALOG_BORDER;
+      l_bar.x = l_dialogDim.x + l_dialogDim.w - DIALOG_BORDER;
+      l_bar.h = l_areaH * l_nbShown / m_options.size();
+      if (l_bar.h < 4) l_bar.h = 4;
+      l_bar.y = l_areaY + (l_areaH - l_bar.h) * m_camera.y / (m_options.size() - l_nbShown);
+      SDL_SetRenderDrawColor(g_renderer, COLOR_TEXT_NORMAL, 255);
+      SDL_RenderFillRect(g_renderer, &l_bar);
    }
 
    // Clean up

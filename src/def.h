@@ -14,8 +14,9 @@
 // framebuffer at runtime; a compact layout is used below 400 lines (CRT 240p).
 #if defined(DEVICE_MISTER)
    #include "mister.h"
-   #define SCREEN_WIDTH             (MiSTer::screenW)
-   #define SCREEN_HEIGHT            (MiSTer::screenH)
+   // Size of the safe area (screen minus overscan margins); drawing is offset by the viewport
+   #define SCREEN_WIDTH             (MiSTer::screenW - 2 * MiSTer::marginX)
+   #define SCREEN_HEIGHT            (MiSTer::screenH - 2 * MiSTer::marginY)
    #define HARDWARE_ACCELERATION    0
    #define FULLSCREEN               1
    #define FONT_NAME                "NotoSans-Regular.ttf"
